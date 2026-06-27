@@ -49,6 +49,7 @@ export interface SlackConfig {
   signingSecret: string;
   appToken: string;
   lobbyChannelId: string;
+  chatChannelId: string | undefined; // optional dedicated chat/test channel
   botUserId: string;
   channelPrefix: string;
 }
@@ -155,6 +156,7 @@ export const config: AppConfig = {
     signingSecret: process.env.SLACK_SIGNING_SECRET!,
     appToken: process.env.SLACK_APP_TOKEN!,
     lobbyChannelId: process.env.SLACK_LOBBY_CHANNEL!,
+    chatChannelId: process.env.SLACK_CHAT_CHANNEL,
     botUserId: process.env.SLACK_BOT_USER_ID!,
     channelPrefix: 'project-',
   },

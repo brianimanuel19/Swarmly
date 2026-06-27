@@ -89,6 +89,36 @@ export class Orchestrator {
       await this.handleLobbyMessage(msg);
     });
 
+    // 4b. Register chat channel handler (optional — only if SLACK_CHAT_CHANNEL is set)
+    if (config.slack.chatChannelId) {
+      const chatChannelId = config.slack.chatChannelId;
+      this.slackListener.setupChatHandler(chatChannelId, async ({ threadKey, userMessage, userId, channelId, threadTs }) => {
+        try {
+          const { chatReply, clearThread } = await import('../agents/chat-agent.js');
+
+          if (userMessage.trim().toLowerCase() === 'reset') {
+            clearThread(threadKey);
+            await this.webClient.chat.postMessage({
+              channel: channelId,
+              thread_ts: threadTs,
+              text: 'Conversation reset. Start fresh!',
+            });
+            return;
+          }
+
+          const reply = await chatReply({ threadKey, userMessage, userId });
+          await this.webClient.chat.postMessage({
+            channel: channelId,
+            thread_ts: threadTs,
+            text: reply,
+          });
+        } catch (err) {
+          console.error('[Orchestrator] chatHandler error:', err);
+        }
+      });
+      console.log(`[Orchestrator] Chat channel registered: ${chatChannelId}`);
+    }
+
     // 5. Register action handlers (run_confirm / run_cancel / checkpoint)
     this.slackListener.setupActionHandlers({
       onRunConfirm: async (event) => {

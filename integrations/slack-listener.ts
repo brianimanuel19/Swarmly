@@ -105,6 +105,47 @@ export class SlackListener {
     });
   }
 
+  // ─── Chat channel handler (test/tán gẫu — Haiku only, no project flow) ────
+
+  setupChatHandler(
+    chatChannelId: string,
+    onMessage: (params: {
+      threadKey: string;
+      userMessage: string;
+      userId: string;
+      channelId: string;
+      threadTs: string;
+    }) => Promise<void>,
+  ): void {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.app.message(async ({ message }: { message: any }) => {
+      if (
+        message.subtype !== undefined ||
+        !('text' in message) ||
+        !message.text ||
+        !message.channel ||
+        !message.ts ||
+        !message.user
+      ) {
+        return;
+      }
+
+      if (message.channel !== chatChannelId) return;
+      if (message.user === this.botUserId) return;
+
+      const threadTs: string = message.thread_ts ?? message.ts;
+      const threadKey = `chat:${chatChannelId}:${threadTs}`;
+
+      await onMessage({
+        threadKey,
+        userMessage: message.text as string,
+        userId: message.user as string,
+        channelId: message.channel as string,
+        threadTs,
+      });
+    });
+  }
+
   // ─── App mention listener ─────────────────────────────────────────────────
 
   setupMentionHandler(onMention: (mention: AgentMention) => Promise<void>): void {
