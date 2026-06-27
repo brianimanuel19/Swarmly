@@ -2,8 +2,8 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Install pnpm
-RUN npm install -g pnpm
+# Install git (needed for repo cloning) and pnpm
+RUN apk add --no-cache git && npm install -g pnpm
 
 # Copy package files
 COPY package.json pnpm-lock.yaml ./
