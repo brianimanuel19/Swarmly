@@ -36,6 +36,10 @@ app.use((_req: Request, res: Response, next) => {
 
 app.use(express.static(join(__dirname, 'public')));
 
+app.get('/', (_req: Request, res: Response) => {
+  res.sendFile(join(__dirname, 'public', 'pages', 'index.html'));
+});
+
 // ─── Public routes ────────────────────────────────────────────────────────────
 
 app.get('/api/health', (_req: Request, res: Response) => {
