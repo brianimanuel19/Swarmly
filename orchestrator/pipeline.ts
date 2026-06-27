@@ -197,14 +197,19 @@ export class Pipeline {
       const stackIsEmpty = !stack?.domains || stack.domains.length === 0;
 
       if (stackIsEmpty) {
-        stack = await stackDetector.detect(project.requirement.raw);
+        if (project.repoAnalysis && project.repoAnalysis.detectedStack.length > 0) {
+          // Repo already analyzed — derive stack from analysis instead of asking user
+          stack = stackDetector.fromRepoAnalysis(project.repoAnalysis);
+        } else {
+          stack = await stackDetector.detect(project.requirement.raw);
+        }
         project.stack = stack;
         project.updatedAt = new Date();
         await stateStore.saveProject(project);
       }
 
-      // Handle ambiguities via human clarification
-      if (stack.ambiguities && stack.ambiguities.length > 0) {
+      // Skip ambiguity questions for repo improvement (stack is known from cloned code)
+      if (!project.repoAnalysis && stack.ambiguities && stack.ambiguities.length > 0) {
         await this.postToChannel(
           slackListener,
           channelId,

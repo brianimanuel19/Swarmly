@@ -207,6 +207,42 @@ export class StackDetector extends BaseAgent {
         return '3-6 hours';
     }
   }
+
+  /**
+   * Derive a DetectedStack from an already-completed repo analysis.
+   * Used for repo improvement projects so we skip the LLM stack-detection call
+   * and never ask ambiguity questions — the code already tells us everything.
+   */
+  fromRepoAnalysis(analysis: import('../types/index.js').RepoAnalysis): DetectedStack {
+    const detected = analysis.detectedStack.map((s) => s.toLowerCase());
+
+    // Infer primaryDomain from the detected stack strings
+    let primaryDomain: StackDomain = 'backend';
+    if (detected.some((s) => s.includes('react') || s.includes('vue') || s.includes('angular'))) {
+      primaryDomain = detected.some((s) => s.includes('node') || s.includes('express') || s.includes('nestjs'))
+        ? 'fullstack'
+        : 'frontend';
+    } else if (detected.some((s) => s.includes('solidity') || s.includes('web3'))) {
+      primaryDomain = 'blockchain';
+    } else if (detected.some((s) => s.includes('ml') || s.includes('torch') || s.includes('tensorflow'))) {
+      primaryDomain = 'ml';
+    } else if (detected.some((s) => s.includes('mobile') || s.includes('react native') || s.includes('flutter'))) {
+      primaryDomain = 'mobile';
+    }
+
+    return {
+      domains: [primaryDomain],
+      primaryDomain,
+      confidence: 0.95,
+      languages: analysis.detectedStack.filter((s) =>
+        ['TypeScript', 'JavaScript', 'Python', 'Go', 'Rust', 'Java', 'C#', 'Ruby', 'PHP'].includes(s),
+      ),
+      frameworks: analysis.detectedStack.filter((s) =>
+        !['TypeScript', 'JavaScript', 'Python', 'Go', 'Rust', 'Java', 'C#', 'Ruby', 'PHP'].includes(s),
+      ),
+      ambiguities: [],
+    };
+  }
 }
 
 // ─── Singleton ────────────────────────────────────────────────────────────────
