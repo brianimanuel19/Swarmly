@@ -202,6 +202,7 @@ export class SlackListener {
     onCheckpointApprove: (event: ActionEvent) => Promise<void>;
     onCheckpointReject: (event: ActionEvent) => Promise<void>;
     onResumeProject: (event: ActionEvent) => Promise<void>;
+    onClarificationAnswer: (event: ActionEvent) => Promise<void>;
   }): void {
     this.app.action('run_confirm', async (args: any) => {
       await args.ack();
@@ -231,6 +232,12 @@ export class SlackListener {
     this.app.action('resume_project', async (args: any) => {
       await args.ack();
       await handlers.onResumeProject(args as ActionEvent);
+    });
+
+    // Wildcard handler for clarification question buttons (dynamic action_id)
+    this.app.action(/^clarification_/, async (args: any) => {
+      await args.ack();
+      await handlers.onClarificationAnswer(args as ActionEvent);
     });
   }
 

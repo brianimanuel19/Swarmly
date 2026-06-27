@@ -1079,6 +1079,38 @@ export class Pipeline {
     const workspaceDir = `${config.sandbox.workspaceBase}/${projectId}`;
     const specPath = path.join(workspaceDir, 'swarmly-spec.md');
 
+    // Skip clone + analysis if already done (e.g. pipeline restarted mid-flow)
+    if (project.repoAnalysis) {
+      await this.postToChannel(
+        slackListener, channelId,
+        `Resuming from saved analysis of *${fullName}*…`,
+      );
+      // Jump straight to checkpoint
+      const checkpoint = await humanCheckpoint.request({
+        projectId,
+        phase: ProjectPhase.ANALYZING,
+        summary:
+          `Analysis of *${fullName}* (resumed).\n` +
+          `${project.repoAnalysis.improvementAreas.length} improvement area(s) identified.`,
+        questions: [
+          'Do the improvement areas match your goals?',
+          'Should Swarmly proceed with the sprint plan?',
+        ],
+        showCostSoFar: false,
+        slackChannelId: channelId,
+      });
+      if (!checkpoint.approved) {
+        throw new Error(`[Pipeline] Repo analysis rejected. Aborting.`);
+      }
+      if (!project.targetBranch) {
+        project.targetBranch = `swarmly/improvements-${projectId.slice(0, 6)}`;
+        project.githubBranch = project.targetBranch;
+        project.updatedAt = new Date();
+        await stateStore.saveProject(project);
+      }
+      return;
+    }
+
     // ── CLONING ─────────────────────────────────────────────────────────────
     await this.handlePhase(projectId, ProjectPhase.CLONING);
 

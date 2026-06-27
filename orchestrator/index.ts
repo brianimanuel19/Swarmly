@@ -183,6 +183,34 @@ export class Orchestrator {
         const channelId = payload.body?.channel?.id ?? '';
         await this.handleResumeProject(projectId, channelId);
       },
+      onClarificationAnswer: async (event) => {
+        const payload = event as unknown as {
+          body?: {
+            actions?: Array<{ value?: string }>;
+            channel?: { id?: string };
+            message?: { ts?: string };
+          };
+        };
+        const rawValue = payload.body?.actions?.[0]?.value ?? '{}';
+        try {
+          const { projectId, questionIndex, answer } = JSON.parse(rawValue) as {
+            projectId: string;
+            questionIndex: number;
+            answer: string;
+          };
+          const channelId = payload.body?.channel?.id ?? '';
+          const ts = payload.body?.message?.ts ?? '';
+          const { humanCheckpoint } = await import('./human-checkpoint.js');
+          humanCheckpoint.handleClarificationAnswer(projectId, questionIndex, answer);
+          await this.webClient.chat.postMessage({
+            channel: channelId,
+            thread_ts: ts,
+            text: `Got it! You chose: *${answer}*`,
+          });
+        } catch (err) {
+          console.warn(`[Orchestrator] Clarification answer parse error: ${(err as Error).message}`);
+        }
+      },
     });
 
     // 6. Register mention handler
@@ -739,10 +767,11 @@ export class Orchestrator {
       return;
     }
 
-    if (project.phase !== ProjectPhase.PAUSED) {
+    const resumablePhases = [ProjectPhase.PAUSED, ProjectPhase.ANALYZING, ProjectPhase.FAILED];
+    if (!resumablePhases.includes(project.phase)) {
       await this.webClient.chat.postMessage({
         channel: channelId,
-        text: `Project *${project.name}* is not paused (current phase: ${project.phase}).`,
+        text: `Project *${project.name}* cannot be resumed from phase: ${project.phase}.`,
       });
       return;
     }
@@ -775,11 +804,15 @@ export class Orchestrator {
       }
     }
 
-    // Clear pause metadata and set phase back to DEVELOPING
-    project.phase = ProjectPhase.DEVELOPING;
-    project.updatedAt = new Date();
-    await stateStore.saveProject(project);
-    await stateStore.updatePhase(projectId, ProjectPhase.DEVELOPING);
+    // For PAUSED: reset to DEVELOPING so the pipeline loop resumes task execution.
+    // For ANALYZING/FAILED: leave phase as-is — pipeline will re-enter _runRepoAnalysisPhase
+    // which now skips clone+analysis if project.repoAnalysis already exists.
+    if (project.phase === ProjectPhase.PAUSED) {
+      project.phase = ProjectPhase.DEVELOPING;
+      project.updatedAt = new Date();
+      await stateStore.saveProject(project);
+      await stateStore.updatePhase(projectId, ProjectPhase.DEVELOPING);
+    }
 
     await this.webClient.chat.postMessage({
       channel: channelId,

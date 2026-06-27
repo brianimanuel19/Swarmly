@@ -12,15 +12,18 @@ export interface AuthRequest extends Request {
 export function authMiddleware(req: AuthRequest, res: Response, next: NextFunction): void {
   const authHeader = req.headers['authorization'];
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  // SSE connections can't send custom headers, so also accept ?token= query param
+  const token = authHeader?.startsWith('Bearer ')
+    ? authHeader.slice(7)
+    : (req.query['token'] as string | undefined) ?? '';
+
+  if (!token) {
     res.status(401).json({
       error: 'Unauthorized',
       message: 'Missing or malformed Authorization header. Expected: Bearer <token>',
     });
     return;
   }
-
-  const token = authHeader.slice(7); // Remove "Bearer " prefix
 
   try {
     const decoded = jwt.verify(token, config.dashboard.jwtSecret) as {

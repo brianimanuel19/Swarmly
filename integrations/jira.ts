@@ -80,6 +80,7 @@ export class JiraIntegration {
       method,
       headers,
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(15_000),
     });
 
     if (!response.ok) {
