@@ -242,7 +242,7 @@ Write every section fully. No placeholders or TODOs.`;
     const messages: ConversationHistory = [
       {
         role: 'user',
-        content: `Create a full PRD for:\n\nRequirement: ${requirement}\n\nDetected Stack:\n- Primary Domain: ${stack.primaryDomain}\n- Languages: ${stack.languages.join(', ')}\n- Frameworks: ${stack.frameworks.join(', ')}`,
+        content: `Create a full PRD for:\n\nRequirement: ${requirement}\n\nDetected Stack:\n- Primary Domain: ${stack.primaryDomain}\n- Languages: ${(stack.languages ?? []).join(', ')}\n- Frameworks: ${(stack.frameworks ?? []).join(', ')}`,
         timestamp: new Date(),
       },
     ];

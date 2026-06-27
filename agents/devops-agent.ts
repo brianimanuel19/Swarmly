@@ -42,8 +42,8 @@ CodeOutput schema:
 }`;
 
     const stackDesc = `Stack: ${stack.primaryDomain}
-Languages: ${stack.languages.join(', ')}
-Frameworks: ${stack.frameworks.join(', ')}
+Languages: ${(stack.languages ?? []).join(', ')}
+Frameworks: ${(stack.frameworks ?? []).join(', ')}
 Project: ${projectName}`;
 
     const messages: ConversationHistory = [

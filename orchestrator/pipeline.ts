@@ -267,7 +267,7 @@ export class Pipeline {
       const rawPrd = await this.withLiveMessage(
         slackListener, channelId, AgentRole.PM,
         'Writing PRD…',
-        () => pmAgent.createPRD(prdInput, context.pmSystemPrompt, projectId),
+        () => pmAgent.createPRD(prdInput, stack, projectId),
         (prd) => `PRD written (${prd.length} chars)`,
       );
 

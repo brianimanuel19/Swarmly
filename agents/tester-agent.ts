@@ -85,7 +85,7 @@ export class TesterAgent extends BaseAgent {
     const systemPrompt = `You are Swarmly's Tester Agent. Generate a comprehensive test plan from a PRD.
 
 Testing framework: ${testingFramework}
-Stack: ${stack.languages.join(', ')} / ${stack.frameworks.join(', ')}
+Stack: ${(stack.languages ?? []).join(', ')} / ${(stack.frameworks ?? []).join(', ')}
 
 Output valid JSON matching this exact schema:
 {
@@ -178,7 +178,7 @@ Rules:
     const systemPrompt = `You are Swarmly's Tester Agent. Write comprehensive tests for a completed implementation.
 
 Testing framework: ${testingFramework}
-Stack: ${stack.languages.join(', ')} / ${stack.frameworks.join(', ')}
+Stack: ${(stack.languages ?? []).join(', ')} / ${(stack.frameworks ?? []).join(', ')}
 
 Output valid JSON:
 {
@@ -303,7 +303,7 @@ Test Instructions from Dev: ${implementation.testInstructions}`,
 
     const systemPrompt = `You are Swarmly's Tester Agent. Analyze a test failure and produce a detailed bug report.
 
-Stack: ${stack.languages.join(', ')} / ${stack.frameworks.join(', ')}
+Stack: ${(stack.languages ?? []).join(', ')} / ${(stack.frameworks ?? []).join(', ')}
 
 Output valid JSON matching this exact schema:
 {
