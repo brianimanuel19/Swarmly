@@ -214,7 +214,7 @@ export class StackDetector extends BaseAgent {
    * and never ask ambiguity questions — the code already tells us everything.
    */
   fromRepoAnalysis(analysis: import('../types/index.js').RepoAnalysis): DetectedStack {
-    const detected = analysis.detectedStack.map((s) => s.toLowerCase());
+    const detected = (analysis.detectedStack ?? []).map((s) => s.toLowerCase());
 
     // Infer primaryDomain from the detected stack strings
     let primaryDomain: StackDomain = 'backend';
@@ -230,16 +230,14 @@ export class StackDetector extends BaseAgent {
       primaryDomain = 'mobile';
     }
 
+    const knownLangs = ['TypeScript', 'JavaScript', 'Python', 'Go', 'Rust', 'Java', 'C#', 'Ruby', 'PHP'];
+    const allStack = analysis.detectedStack ?? [];
     return {
       domains: [primaryDomain],
       primaryDomain,
       confidence: 0.95,
-      languages: analysis.detectedStack.filter((s) =>
-        ['TypeScript', 'JavaScript', 'Python', 'Go', 'Rust', 'Java', 'C#', 'Ruby', 'PHP'].includes(s),
-      ),
-      frameworks: analysis.detectedStack.filter((s) =>
-        !['TypeScript', 'JavaScript', 'Python', 'Go', 'Rust', 'Java', 'C#', 'Ruby', 'PHP'].includes(s),
-      ),
+      languages: allStack.filter((s) => knownLangs.includes(s)),
+      frameworks: allStack.filter((s) => !knownLangs.includes(s)),
       ambiguities: [],
     };
   }

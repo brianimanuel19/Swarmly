@@ -197,7 +197,7 @@ export class Pipeline {
       const stackIsEmpty = !stack?.domains || stack.domains.length === 0;
 
       if (stackIsEmpty) {
-        if (project.repoAnalysis && project.repoAnalysis.detectedStack.length > 0) {
+        if (project.repoAnalysis) {
           // Repo already analyzed — derive stack from analysis instead of asking user
           stack = stackDetector.fromRepoAnalysis(project.repoAnalysis);
         } else {
@@ -256,9 +256,9 @@ export class Pipeline {
       // Create PRD — for repo improvement mode, include analysis context
       const prdInput = project.repoAnalysis
         ? `Existing repo: ${project.repoAnalysis.repoName}\n\n` +
-          `Stack: ${project.repoAnalysis.detectedStack.join(', ')}\n\n` +
-          `Current features: ${project.repoAnalysis.existingFeatures.join(', ')}\n\n` +
-          `Improvement areas (prioritised):\n${project.repoAnalysis.improvementAreas
+          `Stack: ${(project.repoAnalysis.detectedStack ?? []).join(', ')}\n\n` +
+          `Current features: ${(project.repoAnalysis.existingFeatures ?? []).join(', ')}\n\n` +
+          `Improvement areas (prioritised):\n${(project.repoAnalysis.improvementAreas ?? [])
             .map((a) => `- [${a.priority}] ${a.title}: ${a.description}`)
             .join('\n')}\n\n` +
           `User goals: ${project.requirement.raw}`
@@ -1103,7 +1103,7 @@ export class Pipeline {
         phase: ProjectPhase.ANALYZING,
         summary:
           `Analysis of *${fullName}* (resumed).\n` +
-          `${project.repoAnalysis.improvementAreas.length} improvement area(s) identified.`,
+          `${(project.repoAnalysis.improvementAreas ?? []).length} improvement area(s) identified.`,
         questions: [
           'Do the improvement areas match your goals?',
           'Should Swarmly proceed with the sprint plan?',
