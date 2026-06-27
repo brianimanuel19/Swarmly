@@ -33,7 +33,6 @@ CREATE TABLE IF NOT EXISTS projects (
   requirement           JSON           DEFAULT NULL,
   stack                 JSON           DEFAULT NULL,
   prd                   LONGTEXT       DEFAULT NULL,
-  codebase              JSON           NOT NULL,
   sprint                JSON           DEFAULT NULL,
   slack_project_channel VARCHAR(255)   DEFAULT NULL,
   jira_sprint_id        VARCHAR(255)   DEFAULT NULL,
@@ -48,6 +47,21 @@ CREATE TABLE IF NOT EXISTS projects (
   UNIQUE KEY uq_projects_workspace_slug (workspace_id, slug),
   CONSTRAINT fk_projects_workspace
     FOREIGN KEY (workspace_id) REFERENCES workspaces (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- project_files — one row per file, replaces JSON codebase blob
+-- ============================================================
+CREATE TABLE IF NOT EXISTS project_files (
+  id          VARCHAR(36)    NOT NULL,
+  project_id  VARCHAR(36)    NOT NULL,
+  file_path   VARCHAR(1000)  NOT NULL,
+  content     LONGTEXT       NOT NULL,
+  updated_at  DATETIME(3)    NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_project_files (project_id, file_path(500)),
+  CONSTRAINT fk_project_files_project
+    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
@@ -116,3 +130,4 @@ CREATE INDEX idx_token_usage_project_id      ON token_usage_log (project_id);
 CREATE INDEX idx_token_usage_workspace_id    ON token_usage_log (workspace_id);
 CREATE INDEX idx_token_usage_created_at      ON token_usage_log (created_at);
 CREATE INDEX idx_sandboxes_project_id        ON sandboxes       (project_id);
+CREATE INDEX idx_project_files_project_id    ON project_files   (project_id);

@@ -57,7 +57,7 @@ function parseJson<T>(val: unknown): T {
   return val as T;
 }
 
-function rowToProjectState(row: RowDataPacket): ProjectState {
+function rowToProjectState(row: RowDataPacket, codebase: Record<string, string> = {}): ProjectState {
   return {
     id: row['id'] as string,
     workspaceId: row['workspace_id'] as string,
@@ -67,7 +67,7 @@ function rowToProjectState(row: RowDataPacket): ProjectState {
     requirement: parseJson<ProjectState['requirement']>(row['requirement']),
     stack: parseJson<ProjectState['stack']>(row['stack']),
     sprint: parseJson<Sprint>(row['sprint']),
-    codebase: parseJson<Record<string, string>>(row['codebase']) ?? {},
+    codebase,
     prd: (row['prd'] ?? '') as string,
     slackProjectChannelId: (row['slack_project_channel'] ?? '') as string,
     jiraProjectKey: (row['jira_project_key'] as string | null) ?? null,
@@ -79,6 +79,18 @@ function rowToProjectState(row: RowDataPacket): ProjectState {
     updatedAt: new Date(row['updated_at'] as string),
     completedAt: row['completed_at'] ? new Date(row['completed_at'] as string) : null,
   };
+}
+
+async function loadCodebase(pool: Pool, projectId: string): Promise<Record<string, string>> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    'SELECT file_path, content FROM project_files WHERE project_id = ?',
+    [projectId],
+  );
+  const codebase: Record<string, string> = {};
+  for (const row of rows) {
+    codebase[row['file_path'] as string] = row['content'] as string;
+  }
+  return codebase;
 }
 
 // ---------------------------------------------------------------------------
@@ -99,13 +111,13 @@ export class StateStore {
     const sql = `
       INSERT INTO projects (
         id, workspace_id, slug, name, phase,
-        requirement, stack, prd, codebase, sprint,
+        requirement, stack, prd, sprint,
         slack_project_channel, jira_project_key, jira_sprint_id,
         github_repo, github_branch,
         budget, created_at, updated_at, completed_at
       ) VALUES (
         ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?
@@ -116,7 +128,6 @@ export class StateStore {
         requirement           = VALUES(requirement),
         stack                 = VALUES(stack),
         prd                   = VALUES(prd),
-        codebase              = VALUES(codebase),
         sprint                = VALUES(sprint),
         slack_project_channel = VALUES(slack_project_channel),
         jira_project_key      = VALUES(jira_project_key),
@@ -137,7 +148,6 @@ export class StateStore {
       JSON.stringify(state.requirement),
       JSON.stringify(state.stack),
       state.prd,
-      JSON.stringify(state.codebase),
       JSON.stringify(state.sprint),
       state.slackProjectChannelId,
       state.jiraProjectKey,
@@ -167,7 +177,8 @@ export class StateStore {
         [projectId],
       );
       if (rows.length === 0) return null;
-      return rowToProjectState(rows[0] as RowDataPacket);
+      const codebase = await loadCodebase(this.pool, projectId);
+      return rowToProjectState(rows[0] as RowDataPacket, codebase);
     } catch (err) {
       throw new Error(`StateStore.loadProject failed: ${(err as Error).message}`);
     }
@@ -188,28 +199,28 @@ export class StateStore {
   }
 
   // -------------------------------------------------------------------------
-  // updateCodebase — load → patch → save (handles deletions cleanly)
+  // updateCodebase — upsert/delete rows in project_files (1 row = 1 file)
   // -------------------------------------------------------------------------
   async updateCodebase(projectId: string, files: FileChange[]): Promise<void> {
     try {
-      const [rows] = await this.pool.query<RowDataPacket[]>(
-        'SELECT codebase FROM projects WHERE id = ?',
-        [projectId],
-      );
-
-      const existing = parseJson<Record<string, string>>(rows[0]?.['codebase']) ?? {};
-
       for (const file of files) {
         if (file.action === 'delete') {
-          delete existing[file.path];
+          await this.pool.query(
+            'DELETE FROM project_files WHERE project_id = ? AND file_path = ?',
+            [projectId, file.path],
+          );
         } else {
-          existing[file.path] = file.content;
+          await this.pool.query(
+            `INSERT INTO project_files (id, project_id, file_path, content)
+             VALUES (?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE content = VALUES(content)`,
+            [uuidv4(), projectId, file.path, file.content],
+          );
         }
       }
-
       await this.pool.query(
-        'UPDATE projects SET codebase = ?, updated_at = NOW(3) WHERE id = ?',
-        [JSON.stringify(existing), projectId],
+        'UPDATE projects SET updated_at = NOW(3) WHERE id = ?',
+        [projectId],
       );
     } catch (err) {
       throw new Error(`StateStore.updateCodebase failed: ${(err as Error).message}`);
