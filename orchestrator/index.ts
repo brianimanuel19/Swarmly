@@ -576,7 +576,7 @@ export class Orchestrator {
     const tracker = new TokenTracker();
     this.projectTrackers.set(projectId, tracker);
 
-    const slug = slugify(name);
+    const slug = `${slugify(name).slice(0, 44)}-${projectId.slice(0, 6)}`;
 
     // Detect stack
     const stack = await stackDetector.detect(requirement);
