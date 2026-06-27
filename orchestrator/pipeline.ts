@@ -186,6 +186,7 @@ export class Pipeline {
 
       // ── 1. DETECTING ───────────────────────────────────────────────────────
       await this.handlePhase(projectId, ProjectPhase.DETECTING);
+      await this.setActivity(projectId, 'Analyzing tech stack from requirement…');
       await this.postToChannel(
         slackListener,
         channelId,
@@ -230,6 +231,7 @@ export class Pipeline {
       // isResuming = true when sprint already exists (resume after credit pause)
       const isResuming = (project.sprint?.tasks?.length ?? 0) > 0;
       await this.handlePhase(projectId, ProjectPhase.PLANNING);
+      await this.setActivity(projectId, 'Loading context and planning sprint…');
       await this.postToChannel(
         slackListener,
         channelId,
@@ -444,6 +446,7 @@ export class Pipeline {
       // ── 3. DEVELOPING ─────────────────────────────────────────────────────
       if (!isResuming) {
         await this.handlePhase(projectId, ProjectPhase.DEVELOPING);
+        await this.setActivity(projectId, 'Starting development…');
       }
 
       // Reload sprint in case we skipped planning (resume path)
@@ -467,6 +470,8 @@ export class Pipeline {
       for (const task of sprint.tasks) {
         // Skip tasks that are already done or still paused (should have been reset to TODO on resume)
         if (task.status === TaskStatus.DONE) continue;
+
+        await this.setActivity(projectId, `Working on task ${task.title} (${task.type})…`);
 
         const feedbackHistory: string[] = feedbackHistoryByTask.get(task.id) ?? [];
 
@@ -686,6 +691,7 @@ export class Pipeline {
 
       // ── 4. TESTING ────────────────────────────────────────────────────────
       await this.handlePhase(projectId, ProjectPhase.TESTING);
+      await this.setActivity(projectId, 'Generating test plan…');
       await this.postToChannel(slackListener, channelId, 'Starting test phase…');
 
       const testerAgent = await loadTesterAgent();
@@ -738,6 +744,7 @@ export class Pipeline {
         channelId,
         `Tests written: ${totalTestFilesWritten} file(s). Running test suite…`,
       );
+      await this.setActivity(projectId, 'Running test suite…');
 
       // Run tests
       let testRun = { stdout: '', stderr: '', exitCode: 0, durationMs: 0, success: true };
@@ -1113,6 +1120,7 @@ export class Pipeline {
 
     // ── CLONING ─────────────────────────────────────────────────────────────
     await this.handlePhase(projectId, ProjectPhase.CLONING);
+    await this.setActivity(projectId, `Cloning ${fullName}…`);
 
     try {
       await this.withLiveMessage(
@@ -1142,6 +1150,7 @@ export class Pipeline {
     for (let i = 0; i < allFilePaths.length; i += CHUNK_SIZE) {
       chunks.push(allFilePaths.slice(i, i + CHUNK_SIZE));
     }
+    await this.setActivity(projectId, `Scanning ${allFilePaths.length} files across ${chunks.length} chunks…`);
 
     const userIntent = project.requirement.raw;
     let spec = '';
@@ -1196,6 +1205,7 @@ export class Pipeline {
 
       // Update progress bar in-place
       await slackListener.updateMessage(channelId, progressTs, progressText(i + 1, Date.now() - analysisStartMs));
+      await this.setActivity(projectId, `Analyzing chunk ${i + 1}/${chunks.length} (${Math.round(((i + 1) / chunks.length) * 100)}%)…`);
     }
 
     // Mark analysis done
@@ -1327,6 +1337,14 @@ export class Pipeline {
       channelId,
       `Analysis approved. Planning improvement sprint…`,
     );
+  }
+
+  // ─── setActivity ──────────────────────────────────────────────────────────
+
+  private async setActivity(projectId: string, activity: string): Promise<void> {
+    try {
+      await stateStore.updateActivity(projectId, activity);
+    } catch { /* non-critical */ }
   }
 
   // ─── handlePhase ───────────────────────────────────────────────────────────

@@ -29,7 +29,7 @@ function createPool(): Pool {
     charset: 'utf8mb4',
     typeCast(field, next) {
       if (field.type === 'JSON') {
-        const str = field.string();
+        const str = field.string('utf8');
         if (str === null) return null;
         try {
           return JSON.parse(str);
@@ -84,6 +84,7 @@ function rowToProjectState(row: RowDataPacket, codebase: Record<string, string> 
     ...(row['target_branch'] ? { targetBranch: row['target_branch'] as string } : {}),
     ...(row['pause_reason'] ? { pauseReason: row['pause_reason'] as 'CREDIT_EXHAUSTED' | 'HUMAN_PAUSE' } : {}),
     ...(row['paused_at_task_id'] ? { pausedAtTaskId: row['paused_at_task_id'] as string } : {}),
+    ...(row['current_activity'] ? { currentActivity: row['current_activity'] as string } : {}),
   };
 }
 
@@ -215,6 +216,20 @@ export class StateStore {
       ]);
     } catch (err) {
       throw new Error(`StateStore.updatePhase failed: ${(err as Error).message}`);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // updateActivity
+  // -------------------------------------------------------------------------
+  async updateActivity(projectId: string, activity: string): Promise<void> {
+    try {
+      await this.pool.query(
+        'UPDATE projects SET current_activity = ?, updated_at = NOW(3) WHERE id = ?',
+        [activity, projectId],
+      );
+    } catch (err) {
+      throw new Error(`StateStore.updateActivity failed: ${(err as Error).message}`);
     }
   }
 

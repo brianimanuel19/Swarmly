@@ -21,6 +21,14 @@ const pool: Pool = mysql.createPool({
   connectionLimit: 5,
   waitForConnections: true,
   charset: 'utf8mb4',
+  typeCast(field, next) {
+    if (field.type === 'JSON') {
+      const str = field.string('utf8');
+      if (str === null) return null;
+      try { return JSON.parse(str); } catch { return str; }
+    }
+    return next();
+  },
 });
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
@@ -168,17 +176,26 @@ app.get('/api/projects/:id/logs', authMiddleware, async (req: AuthRequest, res: 
 
   await streamLogs();
 
+  let lastPhase: string = '';
+  let lastActivity: string = '';
+
   const interval = setInterval(async () => {
     try {
       const project = await stateStore.loadProject(projectId);
       if (project) {
-        sendEvent({
-          type: 'status',
-          phase: project.phase,
-          budget: project.budget,
-          updatedAt: project.updatedAt,
-          timestamp: new Date().toISOString(),
-        });
+        const activity = project.currentActivity ?? '';
+        if (project.phase !== lastPhase || activity !== lastActivity) {
+          lastPhase = project.phase;
+          lastActivity = activity;
+          sendEvent({
+            type: 'status',
+            phase: project.phase,
+            activity,
+            budget: project.budget,
+            updatedAt: project.updatedAt,
+            timestamp: new Date().toISOString(),
+          });
+        }
       }
     } catch {
       // continue

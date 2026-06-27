@@ -68,6 +68,14 @@ export class Orchestrator {
       connectionLimit: 5,
       waitForConnections: true,
       charset: 'utf8mb4',
+      typeCast(field, next) {
+        if (field.type === 'JSON') {
+          const str = field.string('utf8');
+          if (str === null) return null;
+          try { return JSON.parse(str); } catch { return str; }
+        }
+        return next();
+      },
     });
   }
 

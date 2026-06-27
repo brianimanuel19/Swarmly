@@ -123,6 +123,7 @@ export interface ProjectState {
   targetBranch?: string;
   pauseReason?: 'CREDIT_EXHAUSTED' | 'HUMAN_PAUSE';
   pausedAtTaskId?: string;
+  currentActivity?: string;
 }
 
 export interface AgentMessage {

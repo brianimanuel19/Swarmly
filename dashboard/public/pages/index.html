@@ -1120,7 +1120,8 @@
           msgStr = `tokens: ${formatTokens(data.tokens || 0)}  cost: $${(data.costUsd || 0).toFixed(4)}`;
         } else if (data.type === 'status') {
           agentStr = 'STATUS';
-          msgStr = `Phase: ${data.phase || '?'}`;
+          const activityText = data.activity ? ` — ${data.activity}` : '';
+          msgStr = `Phase: ${data.phase || '?'}${activityText}`;
         } else if (data.type === 'connected') {
           agentStr = 'STREAM';
           msgStr = 'Connected to live log stream';
