@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
   id                    VARCHAR(36)    NOT NULL,
   slack_team_id         VARCHAR(255)   NOT NULL,
   team_name             VARCHAR(500)   NOT NULL,
-  anthropic_api_key     VARCHAR(500)   NOT NULL,
+  anthropic_api_key     VARCHAR(500)   NOT NULL DEFAULT '',
   jira_config           JSON           DEFAULT NULL,
   github_config         JSON           DEFAULT NULL,
   daily_budget_usd      DECIMAL(10, 2) NOT NULL DEFAULT 50.00,

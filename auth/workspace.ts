@@ -25,8 +25,8 @@ export class WorkspaceManager {
     try {
       // Insert if not exists; uuidv4() replaces gen_random_uuid()
       await conn.query(
-        `INSERT INTO workspaces (id, slack_team_id, team_name, created_at, updated_at)
-         VALUES (?, ?, ?, NOW(3), NOW(3))
+        `INSERT INTO workspaces (id, slack_team_id, team_name, anthropic_api_key, created_at, updated_at)
+         VALUES (?, ?, ?, '', NOW(3), NOW(3))
          ON DUPLICATE KEY UPDATE team_name = VALUES(team_name)`,
         [uuidv4(), slackTeamId, teamName],
       );
