@@ -142,7 +142,7 @@ export class LongTermMemory {
         JSON.stringify(embedding),
       ]);
     } catch (err) {
-      throw new Error(`LongTermMemory.remember failed: ${(err as Error).message}`);
+      console.warn(`[LongTermMemory] remember skipped (non-critical): ${(err as Error).message}`);
     }
   }
 
@@ -203,7 +203,8 @@ export class LongTermMemory {
         return emb ? { ...base, embedding: emb } : base;
       });
     } catch (err) {
-      throw new Error(`LongTermMemory.recall failed: ${(err as Error).message}`);
+      console.warn(`[LongTermMemory] recall skipped (non-critical): ${(err as Error).message}`);
+      return [];
     }
   }
 
@@ -231,7 +232,8 @@ export class LongTermMemory {
       const bulletPoints = combined.map((e) => `- [${e.agentRole}] ${e.content}`).join('\n');
       return `Previous decisions relevant to your task:\n${bulletPoints}`;
     } catch (err) {
-      throw new Error(`LongTermMemory.recallForAgent failed: ${(err as Error).message}`);
+      console.warn(`[LongTermMemory] recallForAgent skipped (non-critical): ${(err as Error).message}`);
+      return 'No relevant previous decisions found.';
     }
   }
 
