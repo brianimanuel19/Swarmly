@@ -8,28 +8,43 @@ import type { ConversationHistory } from '../types/index.js';
 
 const client = new Anthropic({ apiKey: config.anthropic.apiKey });
 
-const SYSTEM_PROMPT = `You are Swarmly, an AI dev team assistant. You can answer questions about software, architecture, code, and the Swarmly platform. You are helpful, concise, and direct. If the user wants to build a project, tell them to go to the lobby channel instead.`;
+const PERSONAS: Record<string, string> = {
+  pm: `You are a PM — sharp, opinionated, product-minded. You think in outcomes, not features. Talk like a peer: direct, no fluff, occasionally push back if something doesn't make sense. You're not a assistant, you're a collaborator.`,
+  dev: `You are a senior dev — pragmatic, technical, a bit blunt. You say what you think. You prefer simple solutions over clever ones. Talk like you're pair programming with a teammate, not presenting to a client.`,
+  tester: `You are a QA engineer who genuinely cares about quality. You spot edge cases others miss. Talk casually but precisely — like a colleague who's seen too many production bugs to sugarcoat things.`,
+  default: `You're Swarmly — part of an AI dev team (PM, Dev, Tester). Talk naturally, like a smart colleague in a Slack channel. Be concise, skip the formalities. Answer questions, discuss ideas, debate approaches. If someone wants to start a project, point them to the lobby channel. They can tag @pm, @dev, or @tester to talk to a specific agent.`,
+};
 
-// Keep only the last N messages to minimise token spend
+// Keep only the last N messages per thread to minimise token spend
 const MAX_HISTORY = 10;
+const MAX_TOKENS = 512;
 
-// In-memory thread history: threadTs → messages
+// In-memory thread history: threadKey → messages
 const threadHistories = new Map<string, ConversationHistory>();
+
+function detectRole(text: string): string {
+  const lower = text.toLowerCase();
+  if (/@pm\b|^pm[,:\s]/i.test(lower)) return 'pm';
+  if (/@dev\b|^dev[,:\s]/i.test(lower)) return 'dev';
+  if (/@tester\b|^tester[,:\s]/i.test(lower)) return 'tester';
+  return 'default';
+}
 
 export async function chatReply(params: {
   threadKey: string;
   userMessage: string;
   userId: string;
 }): Promise<string> {
-  const { threadKey, userMessage, userId: _userId } = params;
+  const { threadKey, userMessage } = params;
+
+  const role = detectRole(userMessage);
+  const systemPrompt = PERSONAS[role] ?? PERSONAS['default']!;
 
   // Load or init thread history
   const history: ConversationHistory = threadHistories.get(threadKey) ?? [];
 
-  // Append new user message
   history.push({ role: 'user', content: userMessage, timestamp: new Date() });
 
-  // Trim to last MAX_HISTORY messages
   const trimmed = history.slice(-MAX_HISTORY);
 
   const messages: Anthropic.MessageParam[] = trimmed
@@ -38,9 +53,9 @@ export async function chatReply(params: {
 
   try {
     const response = await client.messages.create({
-      model: config.anthropic.models.lobby, // Haiku — cheapest
-      max_tokens: 512,
-      system: SYSTEM_PROMPT,
+      model: config.anthropic.models.lobby, // Haiku
+      max_tokens: MAX_TOKENS,
+      system: systemPrompt,
       messages,
     });
 
@@ -50,7 +65,6 @@ export async function chatReply(params: {
         .map((b) => b.text)
         .join('') || 'Sorry, I could not generate a response.';
 
-    // Persist assistant reply to thread history
     trimmed.push({ role: 'assistant', content: text, timestamp: new Date() });
     threadHistories.set(threadKey, trimmed.slice(-MAX_HISTORY));
 
@@ -58,7 +72,7 @@ export async function chatReply(params: {
     const outTok = response.usage.output_tokens;
     const pricing = config.anthropic.pricing[config.anthropic.models.lobby]!;
     const cost = (inTok / 1e6) * pricing.input + (outTok / 1e6) * pricing.output;
-    console.log(`[chat-agent] ${inTok}in ${outTok}out $${cost.toFixed(6)}`);
+    console.log(`[chat-agent:${role}] ${inTok}in ${outTok}out $${cost.toFixed(6)}`);
 
     return text;
   } catch (err) {
@@ -67,7 +81,6 @@ export async function chatReply(params: {
   }
 }
 
-/** Clear thread history (e.g. when user types "reset") */
 export function clearThread(threadKey: string): void {
   threadHistories.delete(threadKey);
 }

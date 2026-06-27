@@ -92,24 +92,26 @@ export class Orchestrator {
     // 4b. Register chat channel handler (optional — only if SLACK_CHAT_CHANNEL is set)
     if (config.slack.chatChannelId) {
       const chatChannelId = config.slack.chatChannelId;
-      this.slackListener.setupChatHandler(chatChannelId, async ({ threadKey, userMessage, userId, channelId, threadTs }) => {
+      this.slackListener.setupChatHandler(chatChannelId, async ({ userMessage, userId, channelId }) => {
         try {
           const { chatReply, clearThread } = await import('../agents/chat-agent.js');
+
+          // Per-user history so multiple people can chat independently
+          const threadKey = `chat:${channelId}:${userId}`;
 
           if (userMessage.trim().toLowerCase() === 'reset') {
             clearThread(threadKey);
             await this.webClient.chat.postMessage({
               channel: channelId,
-              thread_ts: threadTs,
-              text: 'Conversation reset. Start fresh!',
+              text: 'Cleared! Start fresh anytime.',
             });
             return;
           }
 
           const reply = await chatReply({ threadKey, userMessage, userId });
+          // Post directly in channel — no thread_ts, feels like normal chat
           await this.webClient.chat.postMessage({
             channel: channelId,
-            thread_ts: threadTs,
             text: reply,
           });
         } catch (err) {

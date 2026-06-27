@@ -134,10 +134,9 @@ export class SlackListener {
       if (message.user === this.botUserId) return;
 
       const threadTs: string = message.thread_ts ?? message.ts;
-      const threadKey = `chat:${chatChannelId}:${threadTs}`;
 
       await onMessage({
-        threadKey,
+        threadKey: `chat:${chatChannelId}:${message.user as string}`,
         userMessage: message.text as string,
         userId: message.user as string,
         channelId: message.channel as string,
