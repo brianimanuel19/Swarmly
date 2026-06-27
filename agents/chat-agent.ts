@@ -24,13 +24,76 @@ const MAX_TOKENS = 512;
 // In-memory thread history: threadKey → messages
 const threadHistories = new Map<string, ConversationHistory>();
 
+const ROLE_KEYWORDS: Array<{ role: string; patterns: RegExp[] }> = [
+  {
+    role: 'devops',
+    patterns: [
+      // EN
+      /\b(deploy|deployment|ci\/cd|pipeline|docker|container|kubernetes|k8s|nginx|server|infrastructure|infra|cloud|aws|gcp|azure|hosting|ssl|certificate|domain|dns|port|env(ironment)?|devops|helm|terraform|ansible|monitoring|uptime|downtime|crash(ed)?|restart(ing)?|log(s)?)\b/,
+      // VN
+      /\b(triển khai|máy chủ|hạ tầng|môi trường|cài đặt server|cấu hình server|lên server|deploy lên|chạy production|prod)\b/,
+    ],
+  },
+  {
+    role: 'tester',
+    patterns: [
+      // EN
+      /\b(test(s|ing|case|suite|coverage|plan)?|bug(s)?|qa|quality|regression|edge case|assert|expect|mock|e2e|unit test|integration test|playwright|jest|cypress|broken|not working|doesn'?t work|fail(ing|ed)?|error)\b/,
+      // VN
+      /\b(kiểm thử|test case|báo lỗi|lỗi|bug|không hoạt động|bị lỗi|chạy không được|sai|hỏng|crash)\b/,
+    ],
+  },
+  {
+    role: 'po',
+    patterns: [
+      // EN
+      /\b(prioriti(ze|se|ty|es)|backlog|moscow|must.have|should.have|mvp|scope|stakeholder|business value|user story|stories|acceptance criteria|what to build|roadmap|release|v\d+\.\d+|milestone|feature request|product)\b/,
+      // VN
+      /\b(ưu tiên|tính năng nào|nên làm gì trước|làm cái nào trước|scope|phạm vi|yêu cầu nghiệp vụ|nghiệp vụ|product|sản phẩm|khách hàng muốn)\b/,
+    ],
+  },
+  {
+    role: 'pm',
+    patterns: [
+      // EN
+      /\b(sprint|planning|plan|timeline|deadline|schedule|milestone|task(s)?|ticket|jira|project|kickoff|standup|retrospective|requirement(s)?|prd|spec(ification)?|estimate|story point)\b/,
+      // VN
+      /\b(kế hoạch|lên kế hoạch|sprint|tiến độ|deadline|dự án|yêu cầu|đặc tả|phân tích|thiết kế tính năng|tạo task|phân task|tính năng)\b/,
+    ],
+  },
+  {
+    role: 'dev',
+    patterns: [
+      // EN
+      /\b(code|coding|implement(ation)?|function|method|class|api|endpoint|database|db|query|sql|refactor|logic|algorithm|library|package|module|typescript|javascript|python|node|react|build|compile|syntax|import|export|async|await|null|undefined|type(script)?)\b/,
+      // VN
+      /\b(code|viết code|lập trình|hàm|api|database|query|xử lý logic|implement|làm sao để|cách viết|cách dùng|sửa code|đoạn code|fix code)\b/,
+    ],
+  },
+];
+
 export function detectRole(text: string): string {
   const lower = text.toLowerCase();
+
+  // Hard mention — highest priority
   if (/@pm\b|^pm[,:\s]/i.test(lower)) return 'pm';
   if (/@po\b|^po[,:\s]/i.test(lower)) return 'po';
   if (/@devops\b|^devops[,:\s]/i.test(lower)) return 'devops';
   if (/@dev\b|^dev[,:\s]/i.test(lower)) return 'dev';
   if (/@tester\b|^tester[,:\s]/i.test(lower)) return 'tester';
+
+  // Keyword-based auto-detect — score each role
+  const scores: Record<string, number> = {};
+  for (const { role, patterns } of ROLE_KEYWORDS) {
+    scores[role] = patterns.reduce((acc, re) => {
+      const matches = lower.match(new RegExp(re.source, 'gi'));
+      return acc + (matches ? matches.length : 0);
+    }, 0);
+  }
+
+  const best = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
+  if (best && best[1] > 0) return best[0];
+
   return 'default';
 }
 

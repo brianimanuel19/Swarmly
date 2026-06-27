@@ -36,6 +36,9 @@ Thumbs.db
 *.swp
 *.swo
 
+# Deploy scripts (contains SSH key)
+/scripts/
+
 # Sandbox workspaces (created at runtime)
 /tmp/swarmly-workspaces/
 
