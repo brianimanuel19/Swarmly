@@ -17,6 +17,8 @@ export interface AnthropicConfig {
     tester: string;
     testerComplex: string;
     lobby: string;
+    devops: string;
+    po: string;
   };
   pricing: Record<string, AnthropicModelPricing>;
 }
@@ -50,7 +52,7 @@ export interface SlackConfig {
   signingSecret: string;
   appToken: string;
   lobbyChannelId: string;
-  chatChannelId: string | undefined; // optional dedicated chat/test channel
+  chatChannelId: string | undefined;
   botUserId: string;
   channelPrefix: string;
 }
@@ -114,6 +116,8 @@ export const config: AppConfig = {
       tester: 'claude-haiku-4-5-20251001',
       testerComplex: 'claude-sonnet-4-6',
       lobby: 'claude-haiku-4-5-20251001',
+      devops: 'claude-sonnet-4-6',
+      po: 'claude-sonnet-4-6',
     },
     pricing: {
       'claude-sonnet-4-6': {

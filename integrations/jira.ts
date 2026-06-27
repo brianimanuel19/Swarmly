@@ -234,6 +234,7 @@ export class JiraIntegration {
       TEST: 'Task',
       INFRA: 'Task',
       DESIGN: 'Task',
+      DEVOPS: 'Task',
     };
 
     const acceptanceCriteriaText =

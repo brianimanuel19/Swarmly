@@ -15,6 +15,7 @@ import {
   AgentRole,
   AgentMessage,
 } from '../types/index.js';
+import { buildAgentMessage } from '../integrations/slack-messages.js';
 import cron from 'node-cron';
 import { v4 as uuidv4 } from 'uuid';
 import mysql from 'mysql2/promise';
@@ -94,7 +95,7 @@ export class Orchestrator {
       const chatChannelId = config.slack.chatChannelId;
       this.slackListener.setupChatHandler(chatChannelId, async ({ userMessage, userId, channelId }) => {
         try {
-          const { chatReply, clearThread, detectRole, ROLE_IDENTITY } = await import('../agents/chat-agent.js');
+          const { chatReply, clearThread, detectRole } = await import('../agents/chat-agent.js');
 
           // Per-user history so multiple people can chat independently
           const threadKey = `chat:${channelId}:${userId}`;
@@ -109,15 +110,22 @@ export class Orchestrator {
           }
 
           const role = detectRole(userMessage);
-          const identity = ROLE_IDENTITY[role] ?? ROLE_IDENTITY['default']!;
-
           const reply = await chatReply({ threadKey, userMessage, userId });
-          // Per-role identity: requires chat:write.customize scope
+
+          // Map chat role string to AgentRole enum (or skip header for 'default')
+          const roleToAgentRole: Record<string, AgentRole | undefined> = {
+            pm:     AgentRole.PM,
+            po:     AgentRole.PO,
+            dev:    AgentRole.DEV,
+            devops: AgentRole.DEVOPS,
+            tester: AgentRole.TESTER,
+          };
+          const agentRole = roleToAgentRole[role];
+
           await this.webClient.chat.postMessage({
             channel: channelId,
-            text: reply,
-            username: identity.username,
-            icon_emoji: identity.icon_emoji,
+            text: reply, // plain-text fallback for notifications
+            blocks: agentRole ? buildAgentMessage(reply, agentRole) : undefined,
           });
         } catch (err) {
           console.error('[Orchestrator] chatHandler error:', err);

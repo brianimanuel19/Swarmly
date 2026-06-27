@@ -8,6 +8,7 @@ import {
   CodeOutput,
   TestOutput,
   TestPlan,
+  AgentRole,
 } from '../types/index.js';
 import { stateStore } from '../memory/state-store.js';
 import { sandboxManager } from '../sandbox/sandbox-manager.js';
@@ -22,6 +23,7 @@ import {
   buildSprintSummaryBlock,
   buildBugAlertBlock,
   buildTaskCompleteBlock,
+  buildAgentMessage,
 } from '../integrations/slack-messages.js';
 import { SlackListener } from '../integrations/slack-listener.js';
 
@@ -109,6 +111,16 @@ async function loadWorkspaceManager(): Promise<WorkspaceManagerInterface> {
   return mod.workspaceManager as unknown as WorkspaceManagerInterface;
 }
 
+async function loadPOAgent() {
+  const mod = await import('../agents/po-agent.js');
+  return mod.poAgent;
+}
+
+async function loadDevOpsAgent() {
+  const mod = await import('../agents/devops-agent.js');
+  return mod.devOpsAgent;
+}
+
 // ─── Pipeline ─────────────────────────────────────────────────────────────────
 
 export class Pipeline {
@@ -187,13 +199,23 @@ export class Pipeline {
 
       // Lazy-load agents
       const pmAgent = await loadPMAgent();
+      const poAgent = await loadPOAgent();
 
-      // Create PRD
-      const prd = await pmAgent.createPRD(
+      // Create PRD (PM)
+      const rawPrd = await pmAgent.createPRD(
         project.requirement.raw,
         context.pmSystemPrompt,
         projectId,
       );
+
+      // PO refines the PRD: adds MoSCoW backlog and sharpens acceptance criteria
+      await this.postAgentMessage(slackListener, channelId, AgentRole.PO, 'Reviewing and refining the PRD…');
+      const prd = await poAgent.refinePRD({
+        prd: rawPrd,
+        requirement: project.requirement.raw,
+        projectId,
+      });
+
       project.prd = prd;
       project.updatedAt = new Date();
       await stateStore.saveProject(project);
@@ -235,13 +257,21 @@ export class Pipeline {
         }
       }
 
-      // Create sprint plan
-      const sprint = await pmAgent.createSprintPlan(
+      // Create sprint plan (PM)
+      const rawSprint = await pmAgent.createSprintPlan(
         project.prd,
         stack,
         context.pmSystemPrompt,
         projectId,
       );
+
+      // PO prioritises the backlog using MoSCoW
+      const sprint = await poAgent.prioritiseSprint({
+        sprint: rawSprint,
+        prd: project.prd,
+        projectId,
+      });
+
       project.sprint = sprint;
       project.updatedAt = new Date();
       await stateStore.saveProject(project);
@@ -249,7 +279,7 @@ export class Pipeline {
       await this.postToChannel(
         slackListener,
         channelId,
-        `Sprint planned: *${sprint.goal}* — ${sprint.tasks.length} task(s)`,
+        `Sprint planned: *${sprint.goal}* — ${sprint.tasks.length} task(s) (PO-prioritised)`,
       );
 
       // Create Jira sprint and tasks
@@ -304,6 +334,7 @@ export class Pipeline {
       await this.handlePhase(projectId, ProjectPhase.DEVELOPING);
 
       const devAgent = await loadDevAgent();
+      const devOpsAgent = await loadDevOpsAgent();
       const workspaceManager = await loadWorkspaceManager();
       const feedbackHistoryByTask: Map<string, string[]> = new Map();
 
@@ -325,10 +356,12 @@ export class Pipeline {
         task.status = TaskStatus.IN_PROGRESS;
         await stateStore.updateSprint(projectId, sprint);
 
-        await this.postToChannel(
+        const isInfraTask = task.type === 'INFRA' || task.type === 'DEVOPS';
+        await this.postAgentMessage(
           slackListener,
           channelId,
-          `Dev working on: *${task.title}* (${task.type} | ${task.priority})`,
+          isInfraTask ? AgentRole.DEVOPS : AgentRole.DEV,
+          `Working on: *${task.title}* (${task.type} | ${task.priority})`,
         );
 
         let taskDone = false;
@@ -347,19 +380,28 @@ export class Pipeline {
             codebase = currentProject?.codebase ?? {};
           }
 
-          // Dev implements the task
+          // Route INFRA/DEVOPS tasks to DevOps agent, rest to Dev agent
           let codeOutput: CodeOutput;
           try {
-            codeOutput = await devAgent.implementTask({
-              task,
-              codebase,
-              systemPrompt: context.devSystemPrompt,
-              projectId,
-              feedbackHistory,
-            });
+            if (isInfraTask) {
+              codeOutput = await devOpsAgent.implementTask({
+                task,
+                codebase,
+                stackProfile: context.stackProfile,
+                projectId,
+              });
+            } else {
+              codeOutput = await devAgent.implementTask({
+                task,
+                codebase,
+                systemPrompt: context.devSystemPrompt,
+                projectId,
+                feedbackHistory,
+              });
+            }
           } catch (err: unknown) {
             console.error(
-              `[Pipeline] Dev agent error on attempt ${attempt + 1}: ${(err as Error).message}`,
+              `[Pipeline] ${isInfraTask ? 'DevOps' : 'Dev'} agent error on attempt ${attempt + 1}: ${(err as Error).message}`,
             );
             feedbackHistory.push(
               `Attempt ${attempt + 1} failed with error: ${(err as Error).message}`,
@@ -457,10 +499,11 @@ export class Pipeline {
             taskDone = true;
           } else {
             feedbackHistory.push(`PM review (attempt ${attempt + 1}): ${pmFeedback}`);
-            await this.postToChannel(
+            await this.postAgentMessage(
               slackListener,
               channelId,
-              `PM requested changes on *${task.title}* (attempt ${attempt + 1}): ${pmFeedback}`,
+              AgentRole.PM,
+              `Changes requested on *${task.title}* (attempt ${attempt + 1}): ${pmFeedback}`,
             );
           }
         }
@@ -600,10 +643,11 @@ export class Pipeline {
 
         // Dev fixes each bug
         for (const bug of actionableBugs) {
-          await this.postToChannel(
+          await this.postAgentMessage(
             slackListener,
             channelId,
-            `Dev fixing bug: *${bug.title}* (${bug.severity})`,
+            AgentRole.DEV,
+            `Fixing bug: *${bug.title}* (${bug.severity})`,
           );
           try {
             project = await this._requireProject(projectId);
@@ -799,6 +843,27 @@ export class Pipeline {
       await slackListener.postMessage(channelId, text);
     } catch (err: unknown) {
       console.warn(`[Pipeline] postToChannel failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Post a message attributed to a specific agent role (Block Kit context header).
+   * Works in every Slack channel — no webhook or scope required.
+   */
+  private async postAgentMessage(
+    slackListener: SlackListener,
+    channelId: string,
+    role: AgentRole,
+    text: string,
+  ): Promise<void> {
+    try {
+      await slackListener.postMessage(
+        channelId,
+        text,
+        buildAgentMessage(text, role) as Parameters<typeof slackListener.postMessage>[2],
+      );
+    } catch (err: unknown) {
+      console.warn(`[Pipeline] postAgentMessage failed: ${(err as Error).message}`);
     }
   }
 

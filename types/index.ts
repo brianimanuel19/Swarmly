@@ -19,6 +19,8 @@ export enum AgentRole {
   PM = 'PM',
   DEV = 'DEV',
   TESTER = 'TESTER',
+  DEVOPS = 'DEVOPS',
+  PO = 'PO',
 }
 
 export enum TaskStatus {
@@ -73,7 +75,7 @@ export interface Task {
   jiraId: string;
   title: string;
   description: string;
-  type: 'BE' | 'FE' | 'TEST' | 'INFRA' | 'DESIGN';
+  type: 'BE' | 'FE' | 'TEST' | 'INFRA' | 'DESIGN' | 'DEVOPS';
   status: TaskStatus;
   assignee: AgentRole;
   priority: 'HIGH' | 'MEDIUM' | 'LOW';

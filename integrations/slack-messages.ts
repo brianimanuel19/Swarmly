@@ -37,6 +37,40 @@ function context(mrkdwn: string): KnownBlock {
   };
 }
 
+// ─── Agent identity ───────────────────────────────────────────────────────────
+
+const AGENT_IDENTITY: Record<string, { label: string; emoji: string }> = {
+  [AgentRole.PM]:     { label: 'PM Agent',     emoji: '📋' },
+  [AgentRole.PO]:     { label: 'PO Agent',     emoji: '💼' },
+  [AgentRole.DEV]:    { label: 'Dev Agent',    emoji: '💻' },
+  [AgentRole.DEVOPS]: { label: 'DevOps Agent', emoji: '⚙️' },
+  [AgentRole.TESTER]: { label: 'Tester Agent', emoji: '🔬' },
+};
+
+/**
+ * Wraps any agent reply in Block Kit with a context header showing the agent
+ * identity. Works in every Slack channel — no webhook or scope required.
+ *
+ * @param text    - The message body (supports mrkdwn)
+ * @param role    - AgentRole or freeform string key (e.g. 'devops')
+ */
+export function buildAgentMessage(text: string, role: AgentRole | string): KnownBlock[] {
+  const identity = AGENT_IDENTITY[role];
+  const blocks: KnownBlock[] = [];
+
+  if (identity) {
+    blocks.push(context(`${identity.emoji}  *${identity.label}*`));
+  }
+
+  // Split long messages into multiple section blocks (Slack limit: 3000 chars/block)
+  const chunks = text.match(/.{1,2900}/gs) ?? [text];
+  for (const chunk of chunks) {
+    blocks.push(section(chunk));
+  }
+
+  return blocks;
+}
+
 function buildProgressBar(used: number, allocated: number, width = 20): string {
   const ratio = Math.min(used / Math.max(allocated, 1), 1);
   const filled = Math.round(ratio * width);
@@ -234,6 +268,7 @@ export function buildTaskCompleteBlock(task: Task, commitUrl: string): KnownBloc
     TEST: '🧪 Test',
     INFRA: '🏗️ Infra',
     DESIGN: '📐 Design',
+    DEVOPS: '🔧 DevOps',
   };
 
   const priorityEmoji: Record<Task['priority'], string> = {
@@ -340,7 +375,9 @@ export function buildCostAlertBlock(budget: SprintBudget): KnownBlock[] {
 export function buildCostReportBlock(report: CostReport): KnownBlock[] {
   const agentEmoji: Record<AgentRole, string> = {
     [AgentRole.PM]: '👩‍💼',
+    [AgentRole.PO]: '💼',
     [AgentRole.DEV]: '👨‍💻',
+    [AgentRole.DEVOPS]: '⚙️',
     [AgentRole.TESTER]: '🧪',
   };
 

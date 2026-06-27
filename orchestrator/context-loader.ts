@@ -13,8 +13,12 @@ export interface LoadedContext {
   stackProfile: string;
   /** System prompt for the PM agent */
   pmSystemPrompt: string;
+  /** System prompt for the PO agent */
+  poSystemPrompt: string;
   /** System prompt for the Dev agent, with [STACK_PROFILE] replaced */
   devSystemPrompt: string;
+  /** System prompt for the DevOps agent, with [STACK_PROFILE] replaced */
+  devopsSystemPrompt: string;
   /** System prompt for the Tester agent, with [STACK_PROFILE] replaced */
   testerSystemPrompt: string;
 }
@@ -53,16 +57,21 @@ export class ContextLoader {
     }
 
     const pmSystemPrompt = this._readTemplate('pm-system.md');
+    const poSystemPrompt = this._readTemplate('po-system.md');
     const devTemplate = this._readTemplate('dev-system.md');
+    const devopsTemplate = this._readTemplate('devops-system.md');
     const testerTemplate = this._readTemplate('tester-system.md');
 
     const devSystemPrompt = devTemplate.replace(/\[STACK_PROFILE\]/g, stackProfile);
+    const devopsSystemPrompt = devopsTemplate.replace(/\[STACK_PROFILE\]/g, stackProfile);
     const testerSystemPrompt = testerTemplate.replace(/\[STACK_PROFILE\]/g, stackProfile);
 
     return {
       stackProfile,
       pmSystemPrompt,
+      poSystemPrompt,
       devSystemPrompt,
+      devopsSystemPrompt,
       testerSystemPrompt,
     };
   }
