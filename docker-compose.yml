@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  swarmly:
+    build: .
+    container_name: swarmly-container
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: mysql-container
+      DB_PORT: '3306'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /app
+    command: ['pnpm', 'start']
+    ports:
+      - '${DASHBOARD_PORT:-3001}:3001'
+    networks:
+      - default
+      - mysql_net
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '100m'
+        max-file: '3'
+
+networks:
+  mysql_net:
+    external: true
+    name: cesapi_default

@@ -1,0 +1,57 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# TypeScript
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+
+# Database
+*.sql.bak
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Sandbox workspaces (created at runtime)
+/tmp/swarmly-workspaces/
+
+# MLflow artifacts
+mlruns/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Rust
+target/
+
+# Test coverage
+coverage/
+.nyc_output/

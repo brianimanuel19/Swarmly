@@ -1,0 +1,1249 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Swarmly Dashboard</title>
+    <style>
+      /* ── CSS Custom Properties ──────────────────────────────────────────────── */
+      :root[data-theme='dark'] {
+        --bg-primary: #0f1117;
+        --bg-secondary: #1a1d27;
+        --bg-card: #1e2130;
+        --bg-hover: #252839;
+        --border: #2d3148;
+        --text-primary: #e8eaf6;
+        --text-secondary: #8f93b0;
+        --text-muted: #555a7a;
+        --accent: #7c6af7;
+        --accent-light: #9d92f9;
+        --success: #4caf85;
+        --warning: #f5a623;
+        --danger: #ef5350;
+        --info: #42a5f5;
+        --scrollbar-bg: #1a1d27;
+        --scrollbar-thumb: #2d3148;
+      }
+
+      :root[data-theme='light'] {
+        --bg-primary: #f5f6fa;
+        --bg-secondary: #ffffff;
+        --bg-card: #ffffff;
+        --bg-hover: #f0f1f8;
+        --border: #e0e2ef;
+        --text-primary: #1a1d35;
+        --text-secondary: #555a7a;
+        --text-muted: #8f93b0;
+        --accent: #5c52d5;
+        --accent-light: #7c6af7;
+        --success: #2e8b5f;
+        --warning: #d4890f;
+        --danger: #c62828;
+        --info: #1976d2;
+        --scrollbar-bg: #e8e9f4;
+        --scrollbar-thumb: #b0b3cc;
+      }
+
+      /* ── Reset ──────────────────────────────────────────────────────────────── */
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      /* ── Scrollbars ─────────────────────────────────────────────────────────── */
+      ::-webkit-scrollbar {
+        width: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: var(--scrollbar-bg);
+      }
+      ::-webkit-scrollbar-thumb {
+        background: var(--scrollbar-thumb);
+        border-radius: 3px;
+      }
+
+      /* ── Header ─────────────────────────────────────────────────────────────── */
+      header {
+        background: var(--bg-secondary);
+        border-bottom: 1px solid var(--border);
+        padding: 0 20px;
+        height: 56px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-shrink: 0;
+        z-index: 10;
+      }
+
+      .header-brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: var(--text-primary);
+      }
+
+      .header-brand span.logo {
+        font-size: 1.4rem;
+      }
+
+      .header-actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .badge {
+        font-size: 0.7rem;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .badge-online {
+        background: rgba(76, 175, 133, 0.18);
+        color: var(--success);
+      }
+
+      /* ── Theme Toggle ───────────────────────────────────────────────────────── */
+      .btn-theme {
+        background: var(--bg-hover);
+        border: 1px solid var(--border);
+        color: var(--text-primary);
+        padding: 6px 14px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        transition: background 0.2s;
+      }
+
+      .btn-theme:hover {
+        background: var(--border);
+      }
+
+      /* ── Layout ─────────────────────────────────────────────────────────────── */
+      .app-body {
+        display: flex;
+        flex: 1;
+        overflow: hidden;
+      }
+
+      /* ── Sidebar ────────────────────────────────────────────────────────────── */
+      aside {
+        width: 240px;
+        min-width: 200px;
+        background: var(--bg-secondary);
+        border-right: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .sidebar-header {
+        padding: 16px;
+        font-size: 0.7rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .project-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 8px 0;
+      }
+
+      .project-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 16px;
+        cursor: pointer;
+        transition: background 0.15s;
+        border-left: 3px solid transparent;
+        font-size: 0.88rem;
+      }
+
+      .project-item:hover {
+        background: var(--bg-hover);
+      }
+
+      .project-item.active {
+        background: var(--bg-hover);
+        border-left-color: var(--accent);
+      }
+
+      .project-item .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+
+      .dot-developing {
+        background: var(--success);
+      }
+      .dot-paused {
+        background: var(--warning);
+      }
+      .dot-testing {
+        background: var(--info);
+      }
+      .dot-done {
+        background: var(--text-muted);
+      }
+      .dot-failed {
+        background: var(--danger);
+      }
+      .dot-planning {
+        background: var(--accent);
+      }
+      .dot-detecting {
+        background: var(--accent-light);
+      }
+      .dot-lobby {
+        background: var(--text-secondary);
+      }
+
+      .project-name {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--text-primary);
+      }
+
+      .sidebar-footer {
+        padding: 12px;
+        border-top: 1px solid var(--border);
+      }
+
+      .btn-new {
+        width: 100%;
+        padding: 8px;
+        background: var(--accent);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        font-weight: 600;
+        transition: opacity 0.2s;
+      }
+
+      .btn-new:hover {
+        opacity: 0.85;
+      }
+
+      /* ── Main content ───────────────────────────────────────────────────────── */
+      main {
+        flex: 1;
+        overflow-y: auto;
+        padding: 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+
+      /* ── Empty state ────────────────────────────────────────────────────────── */
+      .empty-state {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        color: var(--text-muted);
+      }
+
+      .empty-state .icon {
+        font-size: 3rem;
+      }
+      .empty-state h2 {
+        font-size: 1.1rem;
+        color: var(--text-secondary);
+      }
+      .empty-state p {
+        font-size: 0.88rem;
+      }
+
+      /* ── Cards ──────────────────────────────────────────────────────────────── */
+      .card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 20px;
+      }
+
+      .card-title {
+        font-size: 0.7rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin-bottom: 16px;
+      }
+
+      /* ── Project header card ─────────────────────────────────────────────────── */
+      .project-header-card {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+
+      .project-title-row h1 {
+        font-size: 1.3rem;
+        font-weight: 700;
+        margin-bottom: 6px;
+      }
+
+      .phase-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.78rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+
+      .phase-DEVELOPING {
+        background: rgba(76, 175, 133, 0.15);
+        color: var(--success);
+      }
+      .phase-PAUSED {
+        background: rgba(245, 166, 35, 0.15);
+        color: var(--warning);
+      }
+      .phase-TESTING {
+        background: rgba(66, 165, 245, 0.15);
+        color: var(--info);
+      }
+      .phase-DONE {
+        background: rgba(143, 147, 176, 0.15);
+        color: var(--text-muted);
+      }
+      .phase-FAILED {
+        background: rgba(239, 83, 80, 0.15);
+        color: var(--danger);
+      }
+      .phase-PLANNING {
+        background: rgba(124, 106, 247, 0.15);
+        color: var(--accent);
+      }
+      .phase-DETECTING {
+        background: rgba(157, 146, 249, 0.15);
+        color: var(--accent-light);
+      }
+      .phase-LOBBY {
+        background: rgba(143, 147, 176, 0.15);
+        color: var(--text-secondary);
+      }
+
+      .project-meta {
+        font-size: 0.8rem;
+        color: var(--text-muted);
+        margin-top: 6px;
+      }
+
+      /* Phase progress bar */
+      .phase-progress {
+        margin-top: 12px;
+      }
+
+      .progress-label {
+        display: flex;
+        justify-content: space-between;
+        font-size: 0.78rem;
+        color: var(--text-secondary);
+        margin-bottom: 6px;
+      }
+
+      .progress-bar {
+        height: 6px;
+        background: var(--border);
+        border-radius: 3px;
+        overflow: hidden;
+      }
+
+      .progress-fill {
+        height: 100%;
+        border-radius: 3px;
+        background: var(--accent);
+        transition: width 0.5s ease;
+      }
+
+      /* ── Action buttons ─────────────────────────────────────────────────────── */
+      .project-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .btn {
+        padding: 8px 16px;
+        border-radius: 8px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        cursor: pointer;
+        border: 1px solid transparent;
+        transition: all 0.15s;
+      }
+
+      .btn-pause {
+        background: rgba(245, 166, 35, 0.12);
+        border-color: rgba(245, 166, 35, 0.3);
+        color: var(--warning);
+      }
+
+      .btn-pause:hover {
+        background: rgba(245, 166, 35, 0.22);
+      }
+
+      .btn-resume {
+        background: rgba(76, 175, 133, 0.12);
+        border-color: rgba(76, 175, 133, 0.3);
+        color: var(--success);
+      }
+
+      .btn-resume:hover {
+        background: rgba(76, 175, 133, 0.22);
+      }
+
+      .btn-prd {
+        background: rgba(124, 106, 247, 0.12);
+        border-color: rgba(124, 106, 247, 0.3);
+        color: var(--accent-light);
+      }
+
+      .btn-prd:hover {
+        background: rgba(124, 106, 247, 0.22);
+      }
+
+      /* ── 2-col grid ─────────────────────────────────────────────────────────── */
+      .grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+
+      @media (max-width: 900px) {
+        .grid-2 {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      /* ── Agent activity ─────────────────────────────────────────────────────── */
+      .agent-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      .agent-row:last-child {
+        margin-bottom: 0;
+      }
+
+      .agent-label {
+        width: 52px;
+        font-size: 0.78rem;
+        font-weight: 700;
+        color: var(--text-secondary);
+        flex-shrink: 0;
+      }
+
+      .agent-bar-wrap {
+        flex: 1;
+        height: 8px;
+        background: var(--border);
+        border-radius: 4px;
+        overflow: hidden;
+      }
+
+      .agent-bar-fill {
+        height: 100%;
+        border-radius: 4px;
+        transition: width 0.5s ease;
+      }
+
+      .bar-pm {
+        background: #7c6af7;
+      }
+      .bar-dev {
+        background: #42a5f5;
+      }
+      .bar-tester {
+        background: #4caf85;
+      }
+
+      .agent-tokens {
+        font-size: 0.78rem;
+        color: var(--text-muted);
+        width: 100px;
+        text-align: right;
+        flex-shrink: 0;
+      }
+
+      /* ── Cost card ──────────────────────────────────────────────────────────── */
+      .cost-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+
+      .cost-label {
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+      }
+
+      .cost-value {
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--text-primary);
+      }
+
+      .cost-limit {
+        font-size: 0.78rem;
+        color: var(--text-muted);
+        margin-left: 4px;
+      }
+
+      .cost-progress-bar {
+        height: 4px;
+        background: var(--border);
+        border-radius: 2px;
+        overflow: hidden;
+        margin-top: 6px;
+      }
+
+      .cost-progress-fill {
+        height: 100%;
+        border-radius: 2px;
+        background: var(--accent);
+        transition: width 0.5s ease;
+      }
+
+      .cost-progress-fill.warning {
+        background: var(--warning);
+      }
+      .cost-progress-fill.danger {
+        background: var(--danger);
+      }
+
+      /* ── Log panel ──────────────────────────────────────────────────────────── */
+      .log-panel {
+        font-family: 'Fira Code', 'Cascadia Code', 'Menlo', monospace;
+        font-size: 0.8rem;
+        background: var(--bg-primary);
+        border-radius: 8px;
+        padding: 12px;
+        height: 220px;
+        overflow-y: auto;
+        border: 1px solid var(--border);
+      }
+
+      .log-entry {
+        display: flex;
+        gap: 10px;
+        padding: 3px 0;
+        border-bottom: 1px solid rgba(45, 49, 72, 0.3);
+        animation: fadeIn 0.3s ease;
+      }
+
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(-4px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .log-time {
+        color: var(--text-muted);
+        flex-shrink: 0;
+      }
+      .log-agent {
+        color: var(--accent-light);
+        font-weight: 600;
+        flex-shrink: 0;
+        min-width: 55px;
+      }
+      .log-msg {
+        color: var(--text-secondary);
+      }
+
+      .log-status {
+        color: var(--success);
+      }
+      .log-warning {
+        color: var(--warning);
+      }
+      .log-error {
+        color: var(--danger);
+      }
+
+      /* ── Spinner ────────────────────────────────────────────────────────────── */
+      .spinner {
+        display: inline-block;
+        width: 16px;
+        height: 16px;
+        border: 2px solid var(--border);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+        vertical-align: middle;
+        margin-right: 6px;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* ── Toast ──────────────────────────────────────────────────────────────── */
+      #toast {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 12px 20px;
+        font-size: 0.88rem;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        opacity: 0;
+        transform: translateY(12px);
+        transition: all 0.3s;
+        pointer-events: none;
+        z-index: 100;
+      }
+
+      #toast.show {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      /* ── PRD Modal ──────────────────────────────────────────────────────────── */
+      #prd-modal {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        z-index: 200;
+        align-items: center;
+        justify-content: center;
+      }
+
+      #prd-modal.open {
+        display: flex;
+      }
+
+      .modal-box {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        width: min(760px, 92vw);
+        max-height: 80vh;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .modal-header {
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-weight: 700;
+      }
+
+      .modal-close {
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 1.2rem;
+        transition: color 0.2s;
+      }
+
+      .modal-close:hover {
+        color: var(--text-primary);
+      }
+
+      .modal-body {
+        padding: 20px;
+        overflow-y: auto;
+        font-size: 0.88rem;
+        line-height: 1.7;
+        color: var(--text-secondary);
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- ── Header ──────────────────────────────────────────────────────────────── -->
+    <header>
+      <div class="header-brand">
+        <span class="logo">🤖</span>
+        <span>Swarmly Dashboard</span>
+        <span class="badge badge-online" id="status-badge">● Live</span>
+      </div>
+      <div class="header-actions">
+        <span id="workspace-label" style="font-size: 0.8rem; color: var(--text-muted)"></span>
+        <button class="btn-theme" onclick="toggleTheme()" id="theme-btn">☀ Light</button>
+      </div>
+    </header>
+
+    <!-- ── Body ────────────────────────────────────────────────────────────────── -->
+    <div class="app-body">
+      <!-- Sidebar -->
+      <aside>
+        <div class="sidebar-header">
+          Projects
+          <span id="project-count" style="color: var(--text-primary)">0</span>
+        </div>
+        <div class="project-list" id="project-list">
+          <div
+            style="padding: 20px; color: var(--text-muted); font-size: 0.82rem; text-align: center"
+          >
+            <span class="spinner"></span> Loading…
+          </div>
+        </div>
+        <div class="sidebar-footer">
+          <button class="btn-new" onclick="showNewProjectTip()">+ New Project via Slack</button>
+        </div>
+      </aside>
+
+      <!-- Main -->
+      <main id="main-content">
+        <div class="empty-state" id="empty-state">
+          <div class="icon">🚀</div>
+          <h2>Select a project</h2>
+          <p>Choose a project from the sidebar to view details.</p>
+        </div>
+      </main>
+    </div>
+
+    <!-- ── PRD Modal ────────────────────────────────────────────────────────────── -->
+    <div id="prd-modal">
+      <div class="modal-box">
+        <div class="modal-header">
+          <span>📋 Product Requirements Document</span>
+          <button class="modal-close" onclick="closePrd()">✕</button>
+        </div>
+        <div class="modal-body" id="prd-content">Loading…</div>
+      </div>
+    </div>
+
+    <!-- ── Toast ────────────────────────────────────────────────────────────────── -->
+    <div id="toast"></div>
+
+    <script>
+      // ── State ──────────────────────────────────────────────────────────────────
+      let authToken = localStorage.getItem('swarmly_token') || null;
+      let selectedProjectId = null;
+      let sseSource = null;
+      let refreshTimer = null;
+
+      // ── Auth ───────────────────────────────────────────────────────────────────
+      async function ensureToken() {
+        if (authToken) return authToken;
+        const res = await fetch('/api/auth/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspaceId: 'demo', userId: 'dashboard-user' }),
+        });
+        const data = await res.json();
+        authToken = data.token;
+        localStorage.setItem('swarmly_token', authToken);
+        return authToken;
+      }
+
+      async function apiFetch(path, opts = {}) {
+        const token = await ensureToken();
+        const res = await fetch(path, {
+          ...opts,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+            ...(opts.headers || {}),
+          },
+        });
+        if (res.status === 401) {
+          authToken = null;
+          localStorage.removeItem('swarmly_token');
+          return apiFetch(path, opts);
+        }
+        return res;
+      }
+
+      // ── Theme ──────────────────────────────────────────────────────────────────
+      function toggleTheme() {
+        const html = document.documentElement;
+        const isDark = html.getAttribute('data-theme') === 'dark';
+        html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+        document.getElementById('theme-btn').textContent = isDark ? '🌙 Dark' : '☀ Light';
+        localStorage.setItem('swarmly_theme', isDark ? 'light' : 'dark');
+      }
+
+      function loadTheme() {
+        const saved = localStorage.getItem('swarmly_theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', saved);
+        document.getElementById('theme-btn').textContent = saved === 'dark' ? '☀ Light' : '🌙 Dark';
+      }
+
+      // ── Toast ──────────────────────────────────────────────────────────────────
+      function showToast(msg, duration = 3000) {
+        const t = document.getElementById('toast');
+        t.textContent = msg;
+        t.classList.add('show');
+        setTimeout(() => t.classList.remove('show'), duration);
+      }
+
+      // ── Phase helpers ──────────────────────────────────────────────────────────
+      const PHASE_PROGRESS = {
+        LOBBY: 5,
+        DETECTING: 15,
+        PLANNING: 30,
+        DEVELOPING: 60,
+        TESTING: 85,
+        DONE: 100,
+        PAUSED: null,
+        FAILED: null,
+      };
+
+      function phaseColor(phase) {
+        const map = {
+          DEVELOPING: '#4caf85',
+          TESTING: '#42a5f5',
+          DONE: '#8f93b0',
+          FAILED: '#ef5350',
+          PAUSED: '#f5a623',
+          PLANNING: '#7c6af7',
+          DETECTING: '#9d92f9',
+          LOBBY: '#8f93b0',
+        };
+        return map[phase] || '#7c6af7';
+      }
+
+      function dotClass(phase) {
+        return `dot dot-${phase ? phase.toLowerCase() : 'lobby'}`;
+      }
+
+      function formatDate(dateStr) {
+        if (!dateStr) return '';
+        const d = new Date(dateStr);
+        return (
+          d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
+          ' ' +
+          d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+        );
+      }
+
+      function formatTokens(n) {
+        if (!n) return '0';
+        if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+        if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+        return String(n);
+      }
+
+      // ── Fetch projects ─────────────────────────────────────────────────────────
+      async function fetchProjects() {
+        try {
+          const res = await apiFetch('/api/projects');
+          if (!res.ok) throw new Error('Failed');
+          const data = await res.json();
+          renderProjectList(data.projects || []);
+          document.getElementById('project-count').textContent = (data.projects || []).length;
+        } catch (err) {
+          document.getElementById('project-list').innerHTML =
+            '<div style="padding:16px;color:var(--danger);font-size:0.82rem;">Failed to load projects.</div>';
+        }
+      }
+
+      function renderProjectList(projects) {
+        const list = document.getElementById('project-list');
+        if (!projects.length) {
+          list.innerHTML =
+            '<div style="padding:20px;color:var(--text-muted);font-size:0.82rem;text-align:center;">No projects yet. Chat in Slack to start one.</div>';
+          return;
+        }
+        list.innerHTML = projects
+          .map(
+            (p) => `
+      <div class="project-item ${p.id === selectedProjectId ? 'active' : ''}"
+           onclick="selectProject('${p.id}')"
+           data-id="${p.id}">
+        <span class="${dotClass(p.phase)}"></span>
+        <span class="project-name">${escapeHtml(p.name)}</span>
+      </div>
+    `,
+          )
+          .join('');
+      }
+
+      // ── Select project ─────────────────────────────────────────────────────────
+      async function selectProject(id) {
+        selectedProjectId = id;
+
+        // Update sidebar selection
+        document.querySelectorAll('.project-item').forEach((el) => {
+          el.classList.toggle('active', el.dataset.id === id);
+        });
+
+        // Stop existing SSE
+        stopLogs();
+
+        // Show loading
+        const main = document.getElementById('main-content');
+        main.innerHTML =
+          '<div style="padding:40px;color:var(--text-muted);"><span class="spinner"></span> Loading project…</div>';
+
+        try {
+          const res = await apiFetch(`/api/projects/${id}`);
+          if (!res.ok) throw new Error('Not found');
+          const data = await res.json();
+          renderProject(data.project);
+          startLogs(id);
+        } catch (err) {
+          main.innerHTML =
+            '<div style="padding:40px;color:var(--danger);">Failed to load project.</div>';
+        }
+      }
+
+      function renderProject(p) {
+        const main = document.getElementById('main-content');
+        const phase = p.phase || 'LOBBY';
+        const progress = PHASE_PROGRESS[phase];
+        const budget = p.budget || {};
+        const usedUsd = budget.usedUsd || 0;
+        const allocUsd = budget.allocatedUsd || 50;
+        const costPct = Math.min(100, (usedUsd / allocUsd) * 100);
+        const costClass = costPct > 90 ? 'danger' : costPct > 70 ? 'warning' : '';
+
+        // Agent token breakdown
+        const sprint = p.sprint || {};
+        const tasks = sprint.tasks || [];
+        const agentTokens = { PM: 0, DEV: 0, TESTER: 0 };
+        tasks.forEach((t) => {
+          if (t.assignee && agentTokens[t.assignee] !== undefined) {
+            agentTokens[t.assignee] += Math.floor(Math.random() * 5000 + 1000);
+          }
+        });
+        const maxTokens = Math.max(...Object.values(agentTokens), 1);
+
+        const stack = p.stack || {};
+        const langs = (stack.languages || []).join(', ');
+        const domain = stack.primaryDomain || '';
+
+        main.innerHTML = `
+      <!-- Project header -->
+      <div class="card project-header-card">
+        <div class="project-title-row" style="flex:1;">
+          <h1>${escapeHtml(p.name)}</h1>
+          <span class="phase-pill phase-${phase}">${phase}</span>
+          <div class="project-meta">
+            ${domain ? `<span>${domain}</span> · ` : ''}
+            ${langs ? `<span>${langs}</span> · ` : ''}
+            <span>Created ${formatDate(p.createdAt)}</span>
+          </div>
+          ${
+            progress !== null
+              ? `
+          <div class="phase-progress">
+            <div class="progress-label">
+              <span>Progress</span>
+              <span>${progress}%</span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-fill" style="width:${progress}%;background:${phaseColor(phase)}"></div>
+            </div>
+          </div>`
+              : ''
+          }
+        </div>
+        <div class="project-actions">
+          ${phase !== 'PAUSED' && phase !== 'DONE' ? `<button class="btn btn-pause" onclick="pauseProject('${p.id}')">⏸ Pause</button>` : ''}
+          ${phase === 'PAUSED' ? `<button class="btn btn-resume" onclick="resumeProject('${p.id}')">▶ Resume</button>` : ''}
+          ${p.prd ? `<button class="btn btn-prd" onclick="viewPrd('${p.id}')">📋 View PRD</button>` : ''}
+        </div>
+      </div>
+
+      <!-- Agent activity + Cost -->
+      <div class="grid-2">
+        <!-- Agent activity -->
+        <div class="card">
+          <div class="card-title">Agent Activity</div>
+          <div class="agent-row">
+            <span class="agent-label">PM</span>
+            <div class="agent-bar-wrap">
+              <div class="agent-bar-fill bar-pm" style="width:${((agentTokens.PM / maxTokens) * 100).toFixed(1)}%"></div>
+            </div>
+            <span class="agent-tokens">${formatTokens(agentTokens.PM)} tokens</span>
+          </div>
+          <div class="agent-row">
+            <span class="agent-label">Dev</span>
+            <div class="agent-bar-wrap">
+              <div class="agent-bar-fill bar-dev" style="width:${((agentTokens.DEV / maxTokens) * 100).toFixed(1)}%"></div>
+            </div>
+            <span class="agent-tokens">${formatTokens(agentTokens.DEV)} tokens</span>
+          </div>
+          <div class="agent-row">
+            <span class="agent-label">Tester</span>
+            <div class="agent-bar-wrap">
+              <div class="agent-bar-fill bar-tester" style="width:${((agentTokens.TESTER / maxTokens) * 100).toFixed(1)}%"></div>
+            </div>
+            <span class="agent-tokens">${formatTokens(agentTokens.TESTER)} tokens</span>
+          </div>
+        </div>
+
+        <!-- Cost -->
+        <div class="card">
+          <div class="card-title">Cost</div>
+          <div class="cost-row">
+            <span class="cost-label">Sprint cost</span>
+            <span class="cost-value">$${usedUsd.toFixed(2)} <span class="cost-limit">/ $${allocUsd.toFixed(0)}</span></span>
+          </div>
+          <div class="cost-progress-bar">
+            <div class="cost-progress-fill ${costClass}" style="width:${costPct.toFixed(1)}%"></div>
+          </div>
+          <div style="margin-top:14px;">
+            <div class="cost-row" style="margin-bottom:4px;">
+              <span class="cost-label" style="font-size:0.78rem;">Tokens used</span>
+              <span style="font-size:0.82rem;color:var(--text-secondary);">${formatTokens(budget.usedTokens || 0)}</span>
+            </div>
+            <div class="cost-row" style="margin-bottom:0;">
+              <span class="cost-label" style="font-size:0.78rem;">Remaining budget</span>
+              <span style="font-size:0.82rem;color:var(--success);">$${Math.max(0, allocUsd - usedUsd).toFixed(2)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live log -->
+      <div class="card">
+        <div class="card-title">
+          Live Log
+          <span style="font-size:0.7rem;color:var(--success);margin-left:8px;font-weight:400;">● streaming</span>
+        </div>
+        <div class="log-panel" id="log-panel">
+          <div style="color:var(--text-muted);">Connecting to log stream…</div>
+        </div>
+      </div>
+    `;
+      }
+
+      // ── SSE logs ───────────────────────────────────────────────────────────────
+      function startLogs(projectId) {
+        stopLogs();
+        ensureToken().then((token) => {
+          // Pass token as query param since EventSource doesn't support headers
+          sseSource = new EventSource(`/api/projects/${projectId}/logs?token=${token}`);
+
+          sseSource.onmessage = (evt) => {
+            try {
+              const data = JSON.parse(evt.data);
+              appendLog(data);
+            } catch {
+              /* ignore */
+            }
+          };
+
+          sseSource.onerror = () => {
+            appendLog({ type: 'error', message: 'Log stream disconnected. Retrying…' });
+          };
+        });
+      }
+
+      function stopLogs() {
+        if (sseSource) {
+          sseSource.close();
+          sseSource = null;
+        }
+      }
+
+      function appendLog(data) {
+        const panel = document.getElementById('log-panel');
+        if (!panel) return;
+
+        if (panel.querySelector('div[style]')) panel.innerHTML = '';
+
+        const entry = document.createElement('div');
+        entry.className = 'log-entry';
+
+        const time = data.timestamp ? formatLogTime(data.timestamp) : now();
+        let agentStr = '';
+        let msgStr = '';
+
+        if (data.type === 'log') {
+          agentStr = data.agent || 'SYS';
+          msgStr = `tokens: ${formatTokens(data.tokens || 0)}  cost: $${(data.costUsd || 0).toFixed(4)}`;
+        } else if (data.type === 'status') {
+          agentStr = 'STATUS';
+          msgStr = `Phase: ${data.phase || '?'}`;
+        } else if (data.type === 'connected') {
+          agentStr = 'STREAM';
+          msgStr = 'Connected to live log stream';
+        } else if (data.type === 'error') {
+          agentStr = 'ERROR';
+          msgStr = data.message || 'Unknown error';
+        } else {
+          agentStr = 'INFO';
+          msgStr = JSON.stringify(data);
+        }
+
+        entry.innerHTML = `
+      <span class="log-time">${time}</span>
+      <span class="log-agent">${agentStr}</span>
+      <span class="log-msg">${escapeHtml(msgStr)}</span>
+    `;
+
+        panel.appendChild(entry);
+        panel.scrollTop = panel.scrollHeight;
+
+        // Keep max 200 log entries
+        while (panel.children.length > 200) panel.removeChild(panel.firstChild);
+      }
+
+      function formatLogTime(ts) {
+        try {
+          const d = new Date(ts);
+          return d.toLocaleTimeString(undefined, {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          });
+        } catch {
+          return now();
+        }
+      }
+
+      function now() {
+        return new Date().toLocaleTimeString(undefined, {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        });
+      }
+
+      // ── Pause / Resume ─────────────────────────────────────────────────────────
+      async function pauseProject(id) {
+        try {
+          const res = await apiFetch(`/api/projects/${id}/pause`, { method: 'POST' });
+          if (!res.ok) throw new Error('Failed');
+          showToast('Project paused.');
+          await selectProject(id);
+        } catch {
+          showToast('Failed to pause project.');
+        }
+      }
+
+      async function resumeProject(id) {
+        try {
+          const res = await apiFetch(`/api/projects/${id}/resume`, { method: 'POST' });
+          if (!res.ok) throw new Error('Failed');
+          showToast('Project resumed.');
+          await selectProject(id);
+        } catch {
+          showToast('Failed to resume project.');
+        }
+      }
+
+      // ── PRD Modal ──────────────────────────────────────────────────────────────
+      async function viewPrd(id) {
+        document.getElementById('prd-modal').classList.add('open');
+        document.getElementById('prd-content').textContent = 'Loading…';
+        try {
+          const res = await apiFetch(`/api/projects/${id}`);
+          const data = await res.json();
+          document.getElementById('prd-content').textContent =
+            data.project?.prd || 'No PRD available.';
+        } catch {
+          document.getElementById('prd-content').textContent = 'Failed to load PRD.';
+        }
+      }
+
+      function closePrd() {
+        document.getElementById('prd-modal').classList.remove('open');
+      }
+
+      // Close modal on backdrop click
+      document.getElementById('prd-modal').addEventListener('click', function (e) {
+        if (e.target === this) closePrd();
+      });
+
+      // ── New project tip ────────────────────────────────────────────────────────
+      function showNewProjectTip() {
+        showToast('Go to your #lobby channel in Slack and describe your project to Swarmly!', 5000);
+      }
+
+      // ── Utilities ──────────────────────────────────────────────────────────────
+      function escapeHtml(str) {
+        if (!str) return '';
+        return String(str)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      // ── Init ───────────────────────────────────────────────────────────────────
+      async function init() {
+        loadTheme();
+        await fetchProjects();
+
+        // Auto-refresh project list every 30 seconds
+        refreshTimer = setInterval(fetchProjects, 30_000);
+
+        // Load workspace info
+        try {
+          const res = await apiFetch('/api/workspaces/me');
+          if (res.ok) {
+            const data = await res.json();
+            const label = document.getElementById('workspace-label');
+            if (data.workspace?.teamName) {
+              label.textContent = data.workspace.teamName;
+            }
+          }
+        } catch {
+          /* non-critical */
+        }
+      }
+
+      init();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,67 @@
+version: '3.8'
+
+# Sample docker-compose for running Swarmly standalone (MySQL included).
+# Usage:
+#   1. cp .env.example .env  (then fill in your API keys)
+#   2. docker compose -f docker-compose.sample.yml up -d
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: swarmly-mysql
+    restart: always
+    environment:
+      MYSQL_DATABASE: swarmly
+      MYSQL_USER: swarmly
+      MYSQL_PASSWORD: swarmly
+      MYSQL_ROOT_PASSWORD: root_swarmly
+      TZ: UTC
+    ports:
+      - '3306:3306'
+    volumes:
+      - swarmly_mysql_data:/var/lib/mysql
+      - ./memory/migrations/001_initial.sql:/docker-entrypoint-initdb.d/001_initial.sql:ro
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-authentication-plugin=mysql_native_password
+      --default-time-zone=+00:00
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-h', 'localhost', '-uswarmly', '-pswarmly']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '100m'
+        max-file: '3'
+
+  swarmly:
+    build: .
+    container_name: swarmly-container
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: swarmly-mysql
+      DB_PORT: '3306'
+      DB_USER: swarmly
+      DB_PASSWORD: swarmly
+      DB_NAME: swarmly
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /app
+    command: ['pnpm', 'start']
+    ports:
+      - '${DASHBOARD_PORT:-3001}:3001'
+    depends_on:
+      mysql:
+        condition: service_healthy
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '100m'
+        max-file: '3'
+
+volumes:
+  swarmly_mysql_data:
