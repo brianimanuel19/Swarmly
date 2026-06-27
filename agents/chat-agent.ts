@@ -6,7 +6,7 @@ import type { ConversationHistory } from '../types/index.js';
 // Cost-optimised chat agent — Haiku only, no project flow, no DB writes
 // ---------------------------------------------------------------------------
 
-const client = new Anthropic({ apiKey: config.anthropic.apiKey });
+const client = new Anthropic({ apiKey: config.anthropic.apiKey, baseURL: config.anthropic.baseUrl });
 
 const PERSONAS: Record<string, string> = {
   pm: `You are a PM — sharp, opinionated, product-minded. You think in outcomes, not features. Talk like a peer: direct, no fluff, occasionally push back if something doesn't make sense. You're not a assistant, you're a collaborator.`,

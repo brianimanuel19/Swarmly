@@ -10,6 +10,7 @@ export interface AnthropicModelPricing {
 
 export interface AnthropicConfig {
   apiKey: string;
+  baseUrl: string;
   models: {
     pm: string;
     dev: string;
@@ -106,6 +107,7 @@ export interface AppConfig {
 export const config: AppConfig = {
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY!,
+    baseUrl: process.env.ANTHROPIC_BASE_URL ?? 'https://api.anthropic.com',
     models: {
       pm: 'claude-sonnet-4-6',
       dev: 'claude-sonnet-4-6',

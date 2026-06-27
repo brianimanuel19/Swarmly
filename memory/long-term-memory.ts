@@ -84,7 +84,7 @@ export class LongTermMemory {
       waitForConnections: true,
       charset: 'utf8mb4',
     });
-    this.anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
+    this.anthropic = new Anthropic({ apiKey: config.anthropic.apiKey, baseURL: config.anthropic.baseUrl });
   }
 
   // -------------------------------------------------------------------------

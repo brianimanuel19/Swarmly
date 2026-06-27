@@ -10,7 +10,7 @@ export abstract class BaseAgent {
   constructor(role: AgentRole, model: string) {
     this.role = role;
     this.model = model;
-    this.client = new Anthropic({ apiKey: config.anthropic.apiKey });
+    this.client = new Anthropic({ apiKey: config.anthropic.apiKey, baseURL: config.anthropic.baseUrl });
   }
 
   protected async call(params: {
