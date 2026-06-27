@@ -701,11 +701,13 @@ export class Orchestrator {
       ].join('\n'),
     });
 
-    // Create initial branch in the per-project GitHub repo
-    try {
-      await projectGitHub.createBranch(projectState.githubBranch);
-    } catch (err) {
-      console.error('[Orchestrator] createBranch error (continuing):', err);
+    // Create initial branch only for greenfield projects (repo improvement uses source repo)
+    if (!sourceRepo) {
+      try {
+        await projectGitHub.createBranch(projectState.githubBranch);
+      } catch (err) {
+        console.error('[Orchestrator] createBranch error (continuing):', err);
+      }
     }
 
     // Run the full pipeline in background (pipeline uses projectState.jiraProjectKey / githubRepo)
