@@ -407,7 +407,7 @@ export function buildBugAlertBlock(bugs: BugReport[]): KnownBlock[] {
   return blocks;
 }
 
-export function buildTaskCompleteBlock(task: Task, commitUrl: string): KnownBlock[] {
+export function buildTaskCompleteBlock(task: Task, commitUrl: string, projectId?: string): KnownBlock[] {
   const typeBadge: Record<Task['type'], string> = {
     BE: '⚙️ Backend',
     FE: '🎨 Frontend',
@@ -449,6 +449,15 @@ export function buildTaskCompleteBlock(task: Task, commitUrl: string): KnownBloc
         ? `*Acceptance Criteria:* ${task.acceptanceCriteria.join(' · ')}`
         : '_No acceptance criteria defined._',
     ),
+    ...(projectId ? [{
+      type: 'actions' as const,
+      elements: [{
+        type: 'button' as const,
+        text: { type: 'plain_text' as const, text: '🔁 Re-do Task', emoji: true },
+        action_id: `task_redo_${projectId}_${task.id}`,
+        value: JSON.stringify({ projectId, taskId: task.id }),
+      }],
+    }] : []),
   ];
 }
 

@@ -145,6 +145,41 @@ export class SlackListener {
     });
   }
 
+  // ─── Project channel handler — respond to messages inside project channels ──
+
+  setupProjectChannelHandler(
+    onMessage: (params: {
+      channelId: string;
+      threadTs: string;
+      userMessage: string;
+      userId: string;
+    }) => Promise<void>,
+  ): void {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.app.message(async ({ message }: { message: any }) => {
+      if (
+        message.subtype !== undefined ||
+        !('text' in message) ||
+        !message.text ||
+        !message.channel ||
+        !message.ts ||
+        !message.user
+      ) return;
+
+      if (message.channel === this.lobbyChannelId) return; // lobby handled separately
+      if (message.user === this.botUserId) return;
+
+      const threadTs: string = message.thread_ts ?? message.ts;
+
+      await onMessage({
+        channelId: message.channel as string,
+        threadTs,
+        userMessage: message.text as string,
+        userId: message.user as string,
+      });
+    });
+  }
+
   // ─── App mention listener ─────────────────────────────────────────────────
 
   setupMentionHandler(onMention: (mention: AgentMention) => Promise<void>): void {
@@ -203,6 +238,8 @@ export class SlackListener {
     onCheckpointReject: (event: ActionEvent) => Promise<void>;
     onResumeProject: (event: ActionEvent) => Promise<void>;
     onClarificationAnswer: (event: ActionEvent) => Promise<void>;
+    onTaskRetry: (event: ActionEvent) => Promise<void>;
+    onTaskRedo: (event: ActionEvent) => Promise<void>;
   }): void {
     this.app.action('run_confirm', async (args: any) => {
       await args.ack();
@@ -238,6 +275,18 @@ export class SlackListener {
     this.app.action(/^clarification_/, async (args: any) => {
       await args.ack();
       await handlers.onClarificationAnswer(args as ActionEvent);
+    });
+
+    // Wildcard handler for task retry buttons (task_retry_<projectId>_<taskId>)
+    this.app.action(/^task_retry_/, async (args: any) => {
+      await args.ack();
+      await handlers.onTaskRetry(args as ActionEvent);
+    });
+
+    // Wildcard handler for task re-do buttons (task_redo_<projectId>_<taskId>)
+    this.app.action(/^task_redo_/, async (args: any) => {
+      await args.ack();
+      await handlers.onTaskRedo(args as ActionEvent);
     });
   }
 

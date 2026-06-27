@@ -58,6 +58,9 @@ export class Orchestrator {
   /** Per-project token trackers keyed by projectId */
   private projectTrackers: Map<string, TokenTracker> = new Map();
 
+  /** Conversation history per thread in project channels (channelId:threadTs → messages) */
+  private projectChannelHistory: Map<string, Array<{ role: 'user' | 'assistant'; content: string }>> = new Map();
+
   constructor() {
     this.pool = mysql.createPool({
       host: config.db.host,
@@ -162,6 +165,88 @@ export class Orchestrator {
       console.log(`[Orchestrator] Chat channel registered: ${chatChannelId}`);
     }
 
+    // 4c. Register project channel handler — full codebase-aware agent (like Claude for VSCode)
+    this.slackListener.setupProjectChannelHandler(async ({ channelId, threadTs, userMessage, userId }) => {
+      try {
+        const project = await stateStore.getProjectByChannelId(channelId);
+        if (!project) return; // not a project channel
+
+        const threadKey = `${channelId}:${threadTs}`;
+
+        // "reset" clears conversation history for this thread
+        if (userMessage.trim().toLowerCase() === 'reset') {
+          this.projectChannelHistory.delete(threadKey);
+          await this.webClient.chat.postMessage({
+            channel: channelId, thread_ts: threadTs,
+            text: '🔄 Conversation cleared. Start fresh!',
+          });
+          return;
+        }
+
+        // Post "thinking" indicator immediately
+        const thinkingMsg = await this.webClient.chat.postMessage({
+          channel: channelId, thread_ts: threadTs,
+          text: '⏳ Thinking…',
+        });
+
+        // Load codebase: try workspace first, fall back to DB
+        let codebase: Record<string, string> = project.codebase ?? {};
+        try {
+          const { workspaceManager } = await import('../sandbox/workspace-manager.js');
+          const wsCb = await workspaceManager.readFiles(project.id);
+          if (Object.keys(wsCb).length > 0) codebase = wsCb;
+        } catch { /* sandbox may not exist — use DB codebase */ }
+
+        const history = this.projectChannelHistory.get(threadKey) ?? [];
+
+        const { projectAgent } = await import('../agents/project-agent.js');
+        const response = await projectAgent.handleMessage({
+          message: userMessage,
+          history,
+          codebase,
+          project,
+          projectId: project.id,
+        });
+
+        // Update history (keep last 10 turns to avoid context overflow)
+        history.push({ role: 'user', content: userMessage });
+        history.push({ role: 'assistant', content: response.text });
+        this.projectChannelHistory.set(threadKey, history.slice(-20));
+
+        // If agent made code changes — apply them
+        if (response.type === 'changes' && response.files && response.files.length > 0) {
+          try {
+            const { workspaceManager } = await import('../sandbox/workspace-manager.js');
+            await workspaceManager.applyChanges(project.id, response.files);
+            await stateStore.updateCodebase(project.id, response.files);
+          } catch (applyErr) {
+            console.warn(`[Orchestrator] projectChannel applyChanges: ${(applyErr as Error).message}`);
+          }
+
+          const fileList = response.files
+            .map((f) => `• \`${f.path}\` _(${f.action})_`)
+            .join('\n');
+
+          const fullText = `${response.text}\n\n*Files changed:*\n${fileList}`;
+          await this.webClient.chat.update({
+            channel: channelId,
+            ts: thinkingMsg.ts as string,
+            text: fullText,
+            blocks: buildAgentMessage(fullText, AgentRole.DEV),
+          });
+        } else {
+          await this.webClient.chat.update({
+            channel: channelId,
+            ts: thinkingMsg.ts as string,
+            text: response.text,
+            blocks: buildAgentMessage(response.text, AgentRole.PM),
+          });
+        }
+      } catch (err) {
+        console.warn(`[Orchestrator] projectChannelHandler error: ${(err as Error).message}`);
+      }
+    });
+
     // 5. Register action handlers (run_confirm / run_cancel / checkpoint)
     this.slackListener.setupActionHandlers({
       onRunConfirm: async (event) => {
@@ -232,6 +317,12 @@ export class Orchestrator {
         } catch (err) {
           console.warn(`[Orchestrator] Clarification answer parse error: ${(err as Error).message}`);
         }
+      },
+      onTaskRetry: async (event) => {
+        await this.handleTaskRetry(event);
+      },
+      onTaskRedo: async (event) => {
+        await this.handleTaskRedo(event);
       },
     });
 
@@ -1032,6 +1123,102 @@ export class Orchestrator {
       console.error('[Orchestrator] findProjectByChannel error:', err);
       return null;
     }
+  }
+
+  // ─── handleTaskRedo ────────────────────────────────────────────────────────
+
+  private async handleTaskRedo(event: unknown): Promise<void> {
+    const e = event as {
+      body?: {
+        channel?: { id?: string };
+        actions?: Array<{ value?: string }>;
+      };
+    };
+
+    const rawValue = e.body?.actions?.[0]?.value ?? '{}';
+    const channelId = e.body?.channel?.id ?? '';
+
+    let projectId = '';
+    let taskId = '';
+    try {
+      ({ projectId, taskId } = JSON.parse(rawValue) as { projectId: string; taskId: string });
+    } catch {
+      console.warn('[Orchestrator] handleTaskRedo: could not parse action value');
+      return;
+    }
+
+    const project = await stateStore.loadProject(projectId);
+    if (!project?.sprint) {
+      await this.webClient.chat.postMessage({ channel: channelId, text: 'Project or sprint not found.' });
+      return;
+    }
+
+    const task = project.sprint.tasks.find((t) => t.id === taskId);
+    if (!task) {
+      await this.webClient.chat.postMessage({ channel: channelId, text: 'Task not found.' });
+      return;
+    }
+
+    const { TaskStatus } = await import('../types/index.js');
+    task.status = TaskStatus.TODO;
+    task.attempts = 0;
+    task.filesWritten = [];
+    await stateStore.updateSprint(projectId, project.sprint);
+
+    await this.webClient.chat.postMessage({
+      channel: channelId,
+      text: `🔁 Re-doing task *${task.title}*… Pipeline resuming.`,
+    });
+
+    await this.handleResumeProject(projectId, channelId);
+  }
+
+  // ─── handleTaskRetry ───────────────────────────────────────────────────────
+
+  private async handleTaskRetry(event: unknown): Promise<void> {
+    const e = event as {
+      body?: {
+        channel?: { id?: string };
+        actions?: Array<{ value?: string }>;
+      };
+    };
+
+    const rawValue = e.body?.actions?.[0]?.value ?? '{}';
+    const channelId = e.body?.channel?.id ?? '';
+
+    let projectId = '';
+    let taskId = '';
+    try {
+      ({ projectId, taskId } = JSON.parse(rawValue) as { projectId: string; taskId: string });
+    } catch {
+      console.warn('[Orchestrator] handleTaskRetry: could not parse action value');
+      return;
+    }
+
+    const project = await stateStore.loadProject(projectId);
+    if (!project?.sprint) {
+      await this.webClient.chat.postMessage({ channel: channelId, text: 'Project or sprint not found.' });
+      return;
+    }
+
+    const task = project.sprint.tasks.find((t) => t.id === taskId);
+    if (!task) {
+      await this.webClient.chat.postMessage({ channel: channelId, text: 'Task not found.' });
+      return;
+    }
+
+    // Reset task (and any downstream tasks that were BLOCKED) back to TODO
+    const { TaskStatus } = await import('../types/index.js');
+    task.status = TaskStatus.TODO;
+    task.attempts = 0;
+    await stateStore.updateSprint(projectId, project.sprint);
+
+    await this.webClient.chat.postMessage({
+      channel: channelId,
+      text: `🔄 Retrying task *${task.title}*… Pipeline resuming.`,
+    });
+
+    await this.handleResumeProject(projectId, channelId);
   }
 }
 

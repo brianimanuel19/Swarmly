@@ -306,6 +306,23 @@ export class StateStore {
   }
 
   // -------------------------------------------------------------------------
+  // getProjectByChannelId — find a project by its Slack project channel ID
+  // -------------------------------------------------------------------------
+  async getProjectByChannelId(channelId: string): Promise<ProjectState | null> {
+    try {
+      const [rows] = await this.pool.query<RowDataPacket[]>(
+        'SELECT * FROM projects WHERE slack_project_channel = ? LIMIT 1',
+        [channelId],
+      );
+      if (rows.length === 0) return null;
+      return rowToProjectState(rows[0] as RowDataPacket);
+    } catch (err) {
+      console.warn(`[StateStore] getProjectByChannelId failed: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // getActiveProjects
   // -------------------------------------------------------------------------
   async getActiveProjects(workspaceId: string): Promise<ProjectState[]> {

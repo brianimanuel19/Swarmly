@@ -660,7 +660,7 @@ export class Pipeline {
               slackListener,
               channelId,
               `Task complete: ${task.title}`,
-              buildTaskCompleteBlock(task, commitUrl),
+              buildTaskCompleteBlock(task, commitUrl, projectId),
             );
 
             taskDone = true;
@@ -699,10 +699,31 @@ export class Pipeline {
             console.warn(`[Pipeline] Jira BLOCKED update failed: ${(err as Error).message}`);
           }
 
-          await this.postToChannel(
+          await this.postBlocksToChannel(
             slackListener,
             channelId,
-            `:sos: *Task blocked after ${maxRetries} attempts:* ${task.title}\nManual intervention required.`,
+            `:sos: Task blocked: ${task.title}`,
+            [
+              {
+                type: 'section',
+                text: {
+                  type: 'mrkdwn',
+                  text: `:sos: *Task blocked after ${maxRetries} attempts:* ${task.title}\nManual intervention or retry required.`,
+                },
+              },
+              {
+                type: 'actions',
+                elements: [
+                  {
+                    type: 'button',
+                    text: { type: 'plain_text', text: '🔄 Retry Task', emoji: true },
+                    style: 'primary',
+                    action_id: `task_retry_${projectId}_${task.id}`,
+                    value: JSON.stringify({ projectId, taskId: task.id }),
+                  },
+                ],
+              },
+            ],
           );
         }
       }
