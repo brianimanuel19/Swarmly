@@ -1,12 +1,17 @@
-import { App, type SlackActionMiddlewareArgs, type SlackCommandMiddlewareArgs } from '@slack/bolt';
+// @slack/bolt is CommonJS — use default import for ESM compatibility
+import bolt from '@slack/bolt';
 import type { KnownBlock } from '@slack/types';
 import type { LobbyMessage, AgentMention } from '../types/index.js';
 import { AgentRole } from '../types/index.js';
 import { config } from '../config/config.js';
 
+const { App } = bolt;
+type BoltApp = InstanceType<typeof bolt.App>;
+
 // ─── Action payload helper types ────────────────────────────────────────────
 
-type ActionEvent = SlackActionMiddlewareArgs & { ack: () => Promise<void> };
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ActionEvent = { ack: () => Promise<void>; body: any; payload: any };
 
 // ─── Reaction callback shape ─────────────────────────────────────────────────
 
@@ -20,13 +25,14 @@ export interface ReactionEvent {
 // ─── SlashCommand handler shape ──────────────────────────────────────────────
 
 export type SlashHandler = (
-  args: SlackCommandMiddlewareArgs & { ack: () => Promise<void> },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  args: { ack: () => Promise<void>; command: any; say: any },
 ) => Promise<void>;
 
 // ─── Main class ─────────────────────────────────────────────────────────────
 
 export class SlackListener {
-  private readonly app: App;
+  private readonly app: BoltApp;
   private readonly lobbyChannelId: string;
   private readonly botUserId: string;
 
@@ -51,8 +57,8 @@ export class SlackListener {
   // ─── Message listener (lobby channel) ─────────────────────────────────────
 
   setupLobbyHandler(onMessage: (msg: LobbyMessage) => Promise<void>): void {
-    this.app.message(async ({ message, client }) => {
-      // Type narrowing — Bolt can surface subtypes; ignore non-plain messages
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.app.message(async ({ message, client }: { message: any; client: any }) => {
       if (
         message.subtype !== undefined ||
         !('text' in message) ||
@@ -64,17 +70,13 @@ export class SlackListener {
         return;
       }
 
-      // Only process messages in the lobby channel
       if (message.channel !== this.lobbyChannelId) return;
-
-      // Skip messages from the bot itself
       if (message.user === this.botUserId) return;
 
-      // Build conversation history from thread if available
       let history: LobbyMessage['history'] = [];
-      const threadTs: string = (message as { thread_ts?: string }).thread_ts ?? message.ts;
+      const threadTs: string = message.thread_ts ?? message.ts;
 
-      if ((message as { thread_ts?: string }).thread_ts) {
+      if (message.thread_ts) {
         const repliesResult = await client.conversations.replies({
           channel: this.lobbyChannelId,
           ts: threadTs,
@@ -82,11 +84,11 @@ export class SlackListener {
         });
 
         history = (repliesResult.messages ?? [])
-          .filter((m) => 'text' in m && m.text)
-          .map((m) => ({
-            role: (m as { user?: string }).user === this.botUserId ? 'assistant' : 'user',
-            content: (m as { text?: string }).text ?? '',
-            timestamp: new Date(parseFloat((m as { ts?: string }).ts ?? '0') * 1000),
+          .filter((m: any) => 'text' in m && m.text)
+          .map((m: any) => ({
+            role: m.user === this.botUserId ? 'assistant' : 'user',
+            content: m.text ?? '',
+            timestamp: new Date(parseFloat(m.ts ?? '0') * 1000),
           }));
       }
 
@@ -96,7 +98,7 @@ export class SlackListener {
         channelId: message.channel,
         ts: message.ts,
         history,
-        workspaceId: (message as { team?: string }).team ?? '',
+        workspaceId: message.team ?? '',
       };
 
       await onMessage(lobbyMsg);
@@ -106,7 +108,8 @@ export class SlackListener {
   // ─── App mention listener ─────────────────────────────────────────────────
 
   setupMentionHandler(onMention: (mention: AgentMention) => Promise<void>): void {
-    this.app.event('app_mention', async ({ event }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.app.event('app_mention', async ({ event }: { event: any }) => {
       const text: string = event.text ?? '';
       const lower = text.toLowerCase();
 
@@ -116,11 +119,9 @@ export class SlackListener {
       } else if (lower.includes('@dev') || lower.includes('dev')) {
         targetAgent = AgentRole.DEV;
       } else {
-        // Default to PM if no specific agent is mentioned
         targetAgent = AgentRole.PM;
       }
 
-      // Strip the bot mention token from the text
       const cleanText = text.replace(/<@[A-Z0-9]+>/gi, '').trim();
 
       const mention: AgentMention = {
@@ -129,7 +130,7 @@ export class SlackListener {
         userId: event.user ?? '',
         channelId: event.channel,
         ts: event.ts,
-        projectId: (event as { channel?: string }).channel ?? '',
+        projectId: event.channel ?? '',
       };
 
       await onMention(mention);
@@ -139,12 +140,13 @@ export class SlackListener {
   // ─── Reaction listener ────────────────────────────────────────────────────
 
   setupReactionHandler(onReaction: (reaction: ReactionEvent) => Promise<void>): void {
-    this.app.event('reaction_added', async ({ event }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.app.event('reaction_added', async ({ event }: { event: any }) => {
       const reactionEvent: ReactionEvent = {
         emoji: event.reaction,
-        messageTs: event.item.type === 'message' ? event.item.ts : '',
+        messageTs: event.item?.type === 'message' ? event.item.ts : '',
         userId: event.user,
-        channelId: event.item.type === 'message' ? event.item.channel : '',
+        channelId: event.item?.type === 'message' ? event.item.channel : '',
       };
 
       await onReaction(reactionEvent);
@@ -160,29 +162,29 @@ export class SlackListener {
     onCheckpointApprove: (event: ActionEvent) => Promise<void>;
     onCheckpointReject: (event: ActionEvent) => Promise<void>;
   }): void {
-    this.app.action('run_confirm', async (args) => {
+    this.app.action('run_confirm', async (args: any) => {
       await args.ack();
-      await handlers.onRunConfirm(args as unknown as ActionEvent);
+      await handlers.onRunConfirm(args as ActionEvent);
     });
 
-    this.app.action('run_edit', async (args) => {
+    this.app.action('run_edit', async (args: any) => {
       await args.ack();
-      await handlers.onRunEdit(args as unknown as ActionEvent);
+      await handlers.onRunEdit(args as ActionEvent);
     });
 
-    this.app.action('run_cancel', async (args) => {
+    this.app.action('run_cancel', async (args: any) => {
       await args.ack();
-      await handlers.onRunCancel(args as unknown as ActionEvent);
+      await handlers.onRunCancel(args as ActionEvent);
     });
 
-    this.app.action('checkpoint_approve', async (args) => {
+    this.app.action('checkpoint_approve', async (args: any) => {
       await args.ack();
-      await handlers.onCheckpointApprove(args as unknown as ActionEvent);
+      await handlers.onCheckpointApprove(args as ActionEvent);
     });
 
-    this.app.action('checkpoint_reject', async (args) => {
+    this.app.action('checkpoint_reject', async (args: any) => {
       await args.ack();
-      await handlers.onCheckpointReject(args as unknown as ActionEvent);
+      await handlers.onCheckpointReject(args as ActionEvent);
     });
   }
 
@@ -195,27 +197,27 @@ export class SlackListener {
     onResume: SlashHandler;
     onHelp: SlashHandler;
   }): void {
-    this.app.command('/swarmly-status', async (args) => {
+    this.app.command('/swarmly-status', async (args: any) => {
       await args.ack();
       await handlers.onStatus(args);
     });
 
-    this.app.command('/swarmly-cost', async (args) => {
+    this.app.command('/swarmly-cost', async (args: any) => {
       await args.ack();
       await handlers.onCost(args);
     });
 
-    this.app.command('/swarmly-pause', async (args) => {
+    this.app.command('/swarmly-pause', async (args: any) => {
       await args.ack();
       await handlers.onPause(args);
     });
 
-    this.app.command('/swarmly-resume', async (args) => {
+    this.app.command('/swarmly-resume', async (args: any) => {
       await args.ack();
       await handlers.onResume(args);
     });
 
-    this.app.command('/swarmly-help', async (args) => {
+    this.app.command('/swarmly-help', async (args: any) => {
       await args.ack();
       await handlers.onHelp(args);
     });
@@ -223,9 +225,6 @@ export class SlackListener {
 
   // ─── Messaging helpers ────────────────────────────────────────────────────
 
-  /**
-   * Post a message to a channel and return the message timestamp.
-   */
   async postMessage(channelId: string, text: string, blocks?: KnownBlock[]): Promise<string> {
     const result = await this.app.client.chat.postMessage({
       channel: channelId,
@@ -240,9 +239,6 @@ export class SlackListener {
     return result.ts;
   }
 
-  /**
-   * Reply inside an existing thread.
-   */
   async replyInThread(
     channelId: string,
     threadTs: string,
@@ -257,9 +253,6 @@ export class SlackListener {
     });
   }
 
-  /**
-   * Update an existing message in place.
-   */
   async updateMessage(
     channelId: string,
     ts: string,
