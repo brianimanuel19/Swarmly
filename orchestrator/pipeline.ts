@@ -9,6 +9,7 @@ import {
   TestOutput,
   TestPlan,
   AgentRole,
+  RepoAnalysis,
 } from '../types/index.js';
 import { stateStore } from '../memory/state-store.js';
 import { sandboxManager } from '../sandbox/sandbox-manager.js';
@@ -21,9 +22,11 @@ import { jiraIntegration } from '../integrations/jira.js';
 import { config } from '../config/config.js';
 import {
   buildSprintSummaryBlock,
+  buildSprintPlanBlock,
   buildBugAlertBlock,
   buildTaskCompleteBlock,
   buildAgentMessage,
+  buildRepoAnalysisBlock,
 } from '../integrations/slack-messages.js';
 import { SlackListener } from '../integrations/slack-listener.js';
 
@@ -149,6 +152,13 @@ export class Pipeline {
     console.log(`[Pipeline] Starting project "${project.name}" (${projectId})`);
 
     try {
+      // ── 0.5. CLONING + ANALYZING (repo improvement mode) ─────────────────
+      if (project.sourceRepo) {
+        await this._runRepoAnalysisPhase(project, projectId, channelId, slackListener);
+        // Reload project — repoAnalysis and targetBranch may have been set
+        project = await this._requireProject(projectId);
+      }
+
       // ── 1. DETECTING ───────────────────────────────────────────────────────
       await this.handlePhase(projectId, ProjectPhase.DETECTING);
       await this.postToChannel(
@@ -201,12 +211,18 @@ export class Pipeline {
       const pmAgent = await loadPMAgent();
       const poAgent = await loadPOAgent();
 
-      // Create PRD (PM)
-      const rawPrd = await pmAgent.createPRD(
-        project.requirement.raw,
-        context.pmSystemPrompt,
-        projectId,
-      );
+      // Create PRD — for repo improvement mode, include analysis context
+      const prdInput = project.repoAnalysis
+        ? `Existing repo: ${project.repoAnalysis.repoName}\n\n` +
+          `Stack: ${project.repoAnalysis.detectedStack.join(', ')}\n\n` +
+          `Current features: ${project.repoAnalysis.existingFeatures.join(', ')}\n\n` +
+          `Improvement areas (prioritised):\n${project.repoAnalysis.improvementAreas
+            .map((a) => `- [${a.priority}] ${a.title}: ${a.description}`)
+            .join('\n')}\n\n` +
+          `User goals: ${project.requirement.raw}`
+        : project.requirement.raw;
+
+      const rawPrd = await pmAgent.createPRD(prdInput, context.pmSystemPrompt, projectId);
 
       // PO refines the PRD: adds MoSCoW backlog and sharpens acceptance criteria
       await this.postAgentMessage(slackListener, channelId, AgentRole.PO, 'Reviewing and refining the PRD…');
@@ -328,6 +344,74 @@ export class Pipeline {
         await this.postToChannel(slackListener, channelId, 'Sandbox ready.');
       } catch (err: unknown) {
         console.warn(`[Pipeline] Sandbox creation error (non-fatal): ${(err as Error).message}`);
+      }
+
+      // ── Sprint plan checkpoint — human must approve before coding starts ──
+      if (config.checkpoints.requireAfterSprintPlan) {
+        await this.postBlocksToChannel(
+          slackListener,
+          channelId,
+          `Sprint plan ready for *${project.name}* — ${sprint.tasks.length} task(s)`,
+          buildSprintPlanBlock({
+            sprint,
+            projectId,
+            ...(project.jiraSprintId ? { jiraSprintId: project.jiraSprintId } : {}),
+            ...(project.jiraProjectKey ? { jiraProjectKey: project.jiraProjectKey } : {}),
+            jiraBaseUrl: config.jira.baseUrl,
+          }),
+        );
+
+        const sprintCheckpoint = await humanCheckpoint.request({
+          projectId,
+          phase: ProjectPhase.PLANNING,
+          summary:
+            `Sprint plan for *${project.name}* is ready.\n` +
+            `*Goal:* ${sprint.goal}\n` +
+            `*Tasks:* ${sprint.tasks.length} (${sprint.tasks.reduce((s, t) => s + t.estimateHours, 0)}h estimated)`,
+          questions: [
+            'Does the task breakdown look correct?',
+            'Are the priorities aligned with business goals?',
+          ],
+          showCostSoFar: true,
+          slackChannelId: channelId,
+        });
+
+        if (!sprintCheckpoint.approved) {
+          await this.postAgentMessage(
+            slackListener,
+            channelId,
+            AgentRole.PM,
+            `Re-planning sprint based on feedback: ${sprintCheckpoint.feedback || 'No feedback provided.'}`,
+          );
+
+          // PM re-creates sprint plan with feedback
+          const revisedSprint = await pmAgent.createSprintPlan(
+            project.prd +
+              `\n\nFeedback on sprint plan: ${sprintCheckpoint.feedback}`,
+            stack,
+            context.pmSystemPrompt,
+            projectId,
+          );
+          sprint.tasks = revisedSprint.tasks;
+          sprint.goal = revisedSprint.goal;
+          await stateStore.updateSprint(projectId, sprint);
+
+          // Update Jira tasks for revised plan
+          try {
+            for (const task of sprint.tasks.filter((t) => !t.jiraId)) {
+              task.jiraId = await jiraIntegration.createTask(task, project.jiraSprintId ?? '');
+            }
+            await stateStore.updateSprint(projectId, sprint);
+          } catch (err: unknown) {
+            console.warn(`[Pipeline] Jira re-plan update failed: ${(err as Error).message}`);
+          }
+
+          await this.postToChannel(
+            slackListener,
+            channelId,
+            `Sprint re-planned: *${sprint.goal}* — ${sprint.tasks.length} task(s). Starting development…`,
+          );
+        }
       }
 
       // ── 3. DEVELOPING ─────────────────────────────────────────────────────
@@ -817,6 +901,168 @@ export class Pipeline {
       );
       throw err;
     }
+  }
+
+  // ─── _runRepoAnalysisPhase ─────────────────────────────────────────────────
+
+  private async _runRepoAnalysisPhase(
+    project: ProjectState,
+    projectId: string,
+    channelId: string,
+    slackListener: SlackListener,
+  ): Promise<void> {
+    const { cloneRepo, readRepoFiles, parseGithubUrl } = await import(
+      '../integrations/repo-cloner.js'
+    );
+    const { pmAgent } = await import('../agents/pm-agent.js');
+    const poAgent = await loadPOAgent();
+
+    const sourceRepo = project.sourceRepo!;
+    const { fullName } = parseGithubUrl(sourceRepo);
+    const workspaceDir = `${config.sandbox.workspaceBase}/${projectId}`;
+
+    // ── CLONING ─────────────────────────────────────────────────────────────
+    await this.handlePhase(projectId, ProjectPhase.CLONING);
+    await this.postToChannel(slackListener, channelId, `Cloning *${fullName}*…`);
+
+    try {
+      await cloneRepo(sourceRepo, workspaceDir, config.github.token);
+      await this.postToChannel(slackListener, channelId, `Repo cloned. Scanning files…`);
+    } catch (err) {
+      const msg = (err as Error).message;
+      await this.postToChannel(
+        slackListener,
+        channelId,
+        `:x: Failed to clone *${fullName}*: ${msg}\n` +
+        `If this is a private repo, ensure your GitHub token has read access.`,
+      );
+      throw new Error(`[Pipeline] Clone failed for ${sourceRepo}: ${msg}`);
+    }
+
+    // ── ANALYZING ───────────────────────────────────────────────────────────
+    await this.handlePhase(projectId, ProjectPhase.ANALYZING);
+    await this.postAgentMessage(slackListener, channelId, AgentRole.PM, `Analyzing *${fullName}*…`);
+
+    const sampledRepo = await readRepoFiles(workspaceDir);
+
+    const userIntent = project.requirement.raw;
+
+    let analysis: RepoAnalysis;
+    try {
+      analysis = await pmAgent.analyzeRepo({ sampledRepo, userIntent, projectId });
+    } catch (err) {
+      await this.postToChannel(
+        slackListener,
+        channelId,
+        `:warning: Repo analysis failed: ${(err as Error).message}. Continuing with available info.`,
+      );
+      // Minimal fallback analysis
+      analysis = {
+        repoUrl: sourceRepo,
+        repoName: fullName,
+        detectedStack: [],
+        existingFeatures: [],
+        technicalDebt: [],
+        securityConcerns: [],
+        improvementAreas: [],
+        summary: 'Analysis could not be completed automatically.',
+        fileCount: sampledRepo.fileCount,
+        sampledFiles: sampledRepo.sampledFiles.map((f) => f.path),
+      };
+    }
+
+    // PO refines the backlog
+    await this.postAgentMessage(slackListener, channelId, AgentRole.PO, 'Prioritising improvement backlog…');
+    try {
+      const refined = await poAgent.buildImprovementBacklog({ analysis, userIntent, projectId });
+      analysis.improvementAreas = refined;
+    } catch {
+      // keep PM analysis as-is
+    }
+
+    // Persist analysis
+    project.repoAnalysis = analysis;
+    project.updatedAt = new Date();
+    await stateStore.saveProject(project);
+
+    // Post analysis card + ask PR target question
+    await this.postBlocksToChannel(
+      slackListener,
+      channelId,
+      `Repo analysis complete for *${fullName}*`,
+      buildRepoAnalysisBlock(analysis, projectId),
+    );
+
+    // ── Clarification: where to push the final PR? ──────────────────────────
+    const prTargetAnswers = await humanCheckpoint.askClarification(
+      [
+        {
+          question: `Where should Swarmly push the improvements?`,
+          options: [
+            `New branch on ${fullName} (swarmly/improvements-${projectId.slice(0, 6)})`,
+            'I will specify a different branch in Slack after the sprint',
+          ],
+        },
+      ],
+      projectId,
+      channelId,
+    );
+
+    // Parse the answer — default to new branch on source repo
+    const targetBranch = prTargetAnswers.includes('swarmly/')
+      ? `swarmly/improvements-${projectId.slice(0, 6)}`
+      : `swarmly/improvements-${projectId.slice(0, 6)}`;
+
+    // ── Checkpoint: human approves analysis before sprint ───────────────────
+    if (config.repoAnalysis.requireCheckpoint) {
+      const checkpoint = await humanCheckpoint.request({
+        projectId,
+        phase: ProjectPhase.ANALYZING,
+        summary:
+          `Analysis of *${fullName}* complete.\n` +
+          `${analysis.improvementAreas.length} improvement area(s) identified.\n` +
+          `${analysis.technicalDebt.length} tech debt item(s), ` +
+          `${analysis.securityConcerns.length} security concern(s).`,
+        questions: [
+          'Do the improvement areas match your goals?',
+          'Should Swarmly proceed with the sprint plan?',
+        ],
+        showCostSoFar: false,
+        slackChannelId: channelId,
+      });
+
+      if (!checkpoint.approved) {
+        throw new Error(
+          `[Pipeline] Repo analysis rejected by <@${checkpoint.userId}>. Aborting.`,
+        );
+      }
+    }
+
+    // Persist target branch
+    project.targetBranch = targetBranch;
+    project.githubBranch = targetBranch;
+    project.updatedAt = new Date();
+    await stateStore.saveProject(project);
+
+    // Create Jira project now that analysis is approved
+    try {
+      const jira = await import('../integrations/jira.js');
+      const jiraProjectKey = await jira.jiraIntegration.createProject({
+        name: project.name,
+        description: `Repo improvement sprint for ${fullName}.\n${analysis.summary}`,
+      });
+      project.jiraProjectKey = jiraProjectKey;
+      await stateStore.saveProject(project);
+      await this.postToChannel(slackListener, channelId, `Jira project created: \`${jiraProjectKey}\``);
+    } catch (err) {
+      console.warn(`[Pipeline] Jira project creation failed (non-fatal): ${(err as Error).message}`);
+    }
+
+    await this.postToChannel(
+      slackListener,
+      channelId,
+      `Analysis approved. Planning improvement sprint…`,
+    );
   }
 
   // ─── handlePhase ───────────────────────────────────────────────────────────

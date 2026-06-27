@@ -82,10 +82,17 @@ export interface SandboxConfig {
 export interface CheckpointsConfig {
   requireAfterPRD: boolean;
   requireAfterDesign: boolean;
+  requireAfterSprintPlan: boolean;
   requireAfterCoding: boolean;
   requireAfterTesting: boolean;
   timeoutMs: number;
   reminderIntervalMs: number;
+}
+
+export interface RepoAnalysisConfig {
+  maxFiles: number;
+  maxFileSizeBytes: number;
+  requireCheckpoint: boolean;
 }
 
 export interface DashboardConfig {
@@ -103,6 +110,7 @@ export interface AppConfig {
   github: GitHubConfigEntry;
   sandbox: SandboxConfig;
   checkpoints: CheckpointsConfig;
+  repoAnalysis: RepoAnalysisConfig;
   dashboard: DashboardConfig;
 }
 
@@ -192,10 +200,17 @@ export const config: AppConfig = {
   checkpoints: {
     requireAfterPRD: true,
     requireAfterDesign: true,
+    requireAfterSprintPlan: true,
     requireAfterCoding: false,
     requireAfterTesting: true,
     timeoutMs: 3_600_000,
     reminderIntervalMs: 1_800_000,
+  },
+
+  repoAnalysis: {
+    maxFiles: 80,
+    maxFileSizeBytes: 50_000,
+    requireCheckpoint: true,
   },
 
   dashboard: {

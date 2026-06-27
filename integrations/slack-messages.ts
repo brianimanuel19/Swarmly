@@ -3,6 +3,7 @@ import type {
   BugReport,
   CheckpointRequest,
   CostReport,
+  RepoAnalysis,
   Sprint,
   SprintBudget,
   Task,
@@ -172,6 +173,85 @@ export function buildStandupBlock(report: {
   ];
 }
 
+export function buildRepoAnalysisBlock(
+  analysis: RepoAnalysis,
+  projectId: string,
+): KnownBlock[] {
+  const severityEmoji: Record<string, string> = {
+    CRITICAL: '🔴',
+    HIGH: '🟠',
+    MEDIUM: '🟡',
+    LOW: '🟢',
+  };
+  const priorityEmoji: Record<string, string> = {
+    MUST: '🔴',
+    SHOULD: '🟡',
+    COULD: '🟢',
+    WONT: '⚪',
+  };
+
+  const debtLines = analysis.technicalDebt
+    .slice(0, 5)
+    .map((d) => `${severityEmoji[d.severity] ?? '•'} ${d.description}${d.file ? ` _(${d.file})_` : ''}`)
+    .join('\n');
+
+  const secLines = analysis.securityConcerns
+    .slice(0, 3)
+    .map((s) => `${severityEmoji[s.severity] ?? '•'} ${s.description}`)
+    .join('\n');
+
+  const improvLines = analysis.improvementAreas
+    .slice(0, 6)
+    .map((i) => `${priorityEmoji[i.priority] ?? '•'} *${i.title}* (~${i.estimateHours}h) — ${i.description}`)
+    .join('\n');
+
+  const blocks: KnownBlock[] = [
+    header(`🔍 Repo Analysis: ${analysis.repoName}`),
+    divider(),
+    section(
+      `*Stack Detected:* ${analysis.detectedStack.join(', ')}\n` +
+      `*Files in repo:* ${analysis.fileCount} total, ${analysis.sampledFiles.length} analyzed`,
+    ),
+    divider(),
+    section(`*Summary*\n${analysis.summary}`),
+  ];
+
+  if (debtLines) {
+    blocks.push(divider(), section(`*Technical Debt*\n${debtLines}`));
+  }
+  if (secLines) {
+    blocks.push(section(`*Security Concerns*\n${secLines}`));
+  }
+  if (improvLines) {
+    blocks.push(divider(), section(`*Improvement Backlog (PO-Prioritised)*\n${improvLines}`));
+  }
+
+  blocks.push(
+    divider(),
+    {
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: '✅ Approve & Start Sprint', emoji: true },
+          style: 'primary',
+          action_id: 'checkpoint_approve',
+          value: projectId,
+        },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: '❌ Cancel', emoji: true },
+          style: 'danger',
+          action_id: 'checkpoint_reject',
+          value: projectId,
+        },
+      ],
+    },
+  );
+
+  return blocks;
+}
+
 export function buildCheckpointBlock(
   params: CheckpointRequest & { costSoFar?: string },
 ): KnownBlock[] {
@@ -213,6 +293,72 @@ export function buildCheckpointBlock(
       },
     ],
   });
+
+  return blocks;
+}
+
+export function buildSprintPlanBlock(params: {
+  sprint: Sprint;
+  projectId: string;
+  jiraSprintId?: string;
+  jiraProjectKey?: string | null;
+  jiraBaseUrl?: string;
+}): KnownBlock[] {
+  const { sprint, projectId, jiraSprintId, jiraProjectKey, jiraBaseUrl } = params;
+
+  const typeEmoji: Record<string, string> = {
+    BE: '⚙️', FE: '🖥️', TEST: '🧪', INFRA: '🏗️', DEVOPS: '🚀', DESIGN: '🎨',
+  };
+  const priorityEmoji: Record<string, string> = { HIGH: '🔴', MEDIUM: '🟡', LOW: '🟢' };
+
+  const taskLines = sprint.tasks
+    .map(
+      (t) =>
+        `${typeEmoji[t.type] ?? '•'} ${priorityEmoji[t.priority] ?? ''} *${t.title}*` +
+        `  _[${t.type} · ${t.estimateHours}h]_`,
+    )
+    .join('\n');
+
+  const totalHours = sprint.tasks.reduce((s, t) => s + t.estimateHours, 0);
+
+  const jiraLink =
+    jiraBaseUrl && jiraProjectKey && jiraSprintId
+      ? `\n\n*Jira Sprint:* <${jiraBaseUrl}/jira/software/projects/${jiraProjectKey}/boards|Open board>`
+      : '';
+
+  const blocks: KnownBlock[] = [
+    header(`📋 Sprint Plan Ready — ${sprint.goal}`),
+    divider(),
+    {
+      type: 'section',
+      fields: [
+        { type: 'mrkdwn', text: `*Tasks*\n${sprint.tasks.length}` },
+        { type: 'mrkdwn', text: `*Estimated total*\n${totalHours}h` },
+      ],
+    },
+    divider(),
+    section(`*Task Breakdown*\n${taskLines || '_No tasks_'}${jiraLink}`),
+    divider(),
+    {
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: '✅ Approve & Start Coding', emoji: true },
+          style: 'primary',
+          action_id: 'checkpoint_approve',
+          value: projectId,
+        },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: '❌ Reject & Re-plan', emoji: true },
+          style: 'danger',
+          action_id: 'checkpoint_reject',
+          value: projectId,
+        },
+      ],
+    },
+  ];
 
   return blocks;
 }

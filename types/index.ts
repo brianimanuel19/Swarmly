@@ -33,6 +33,8 @@ export enum TaskStatus {
 
 export enum ProjectPhase {
   LOBBY = 'LOBBY',
+  CLONING = 'CLONING',
+  ANALYZING = 'ANALYZING',
   DETECTING = 'DETECTING',
   PLANNING = 'PLANNING',
   DEVELOPING = 'DEVELOPING',
@@ -113,6 +115,9 @@ export interface ProjectState {
   createdAt: Date;
   updatedAt: Date;
   completedAt: Date | null;
+  sourceRepo?: string;
+  repoAnalysis?: RepoAnalysis;
+  targetBranch?: string;
 }
 
 export interface AgentMessage {
@@ -171,6 +176,39 @@ export interface TestResult {
   skipped: number;
   duration: number;
   failures: Array<{ test: string; error: string }>;
+}
+
+export interface RepoIssue {
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+  description: string;
+  file?: string;
+}
+
+export interface ImprovementArea {
+  title: string;
+  priority: 'MUST' | 'SHOULD' | 'COULD' | 'WONT';
+  estimateHours: number;
+  description: string;
+}
+
+export interface RepoAnalysis {
+  repoUrl: string;
+  repoName: string;
+  detectedStack: string[];
+  existingFeatures: string[];
+  technicalDebt: RepoIssue[];
+  securityConcerns: RepoIssue[];
+  improvementAreas: ImprovementArea[];
+  summary: string;
+  fileCount: number;
+  sampledFiles: string[];
+}
+
+export interface SampledRepo {
+  repoPath: string;
+  fileCount: number;
+  sampledFiles: Array<{ path: string; content: string }>;
+  fileTree: string[];
 }
 
 export interface BugReport {

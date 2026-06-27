@@ -9,6 +9,7 @@ import {
   SprintBudget,
   TokenUsage,
   AgentRole,
+  RepoAnalysis,
 } from '../types/index.js';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -78,6 +79,9 @@ function rowToProjectState(row: RowDataPacket, codebase: Record<string, string> 
     createdAt: new Date(row['created_at'] as string),
     updatedAt: new Date(row['updated_at'] as string),
     completedAt: row['completed_at'] ? new Date(row['completed_at'] as string) : null,
+    ...(row['source_repo'] ? { sourceRepo: row['source_repo'] as string } : {}),
+    ...(row['repo_analysis'] ? { repoAnalysis: parseJson<RepoAnalysis>(row['repo_analysis']) } : {}),
+    ...(row['target_branch'] ? { targetBranch: row['target_branch'] as string } : {}),
   };
 }
 
@@ -114,13 +118,15 @@ export class StateStore {
         requirement, stack, prd, sprint,
         slack_project_channel, jira_project_key, jira_sprint_id,
         github_repo, github_branch,
-        budget, created_at, updated_at, completed_at
+        budget, created_at, updated_at, completed_at,
+        source_repo, repo_analysis, target_branch
       ) VALUES (
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?,
-        ?, ?, ?, ?
+        ?, ?, ?, ?,
+        ?, ?, ?
       )
       ON DUPLICATE KEY UPDATE
         name                  = VALUES(name),
@@ -136,7 +142,10 @@ export class StateStore {
         github_branch         = VALUES(github_branch),
         budget                = VALUES(budget),
         updated_at            = NOW(3),
-        completed_at          = VALUES(completed_at)
+        completed_at          = VALUES(completed_at),
+        source_repo           = VALUES(source_repo),
+        repo_analysis         = VALUES(repo_analysis),
+        target_branch         = VALUES(target_branch)
     `;
 
     const values = [
@@ -158,6 +167,9 @@ export class StateStore {
       state.createdAt,
       state.updatedAt,
       state.completedAt,
+      state.sourceRepo ?? null,
+      state.repoAnalysis ? JSON.stringify(state.repoAnalysis) : null,
+      state.targetBranch ?? null,
     ];
 
     try {

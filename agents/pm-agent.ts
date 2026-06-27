@@ -6,6 +6,8 @@ import {
   Task,
   TaskStatus,
   ProjectState,
+  SampledRepo,
+  RepoAnalysis,
 } from '../types/index.js';
 import { BaseAgent } from './base-agent.js';
 import { stateStore } from '../memory/state-store.js';
@@ -568,6 +570,70 @@ Keep your response under 200 words. Use plain text (Slack mrkdwn ok).`;
     }
 
     return output.content.trim();
+  }
+
+  // ─── Analyze an existing repo ─────────────────────────────────────────────
+
+  async analyzeRepo(params: {
+    sampledRepo: SampledRepo;
+    userIntent: string;
+    projectId: string;
+  }): Promise<RepoAnalysis> {
+    const { sampledRepo, userIntent, projectId } = params;
+
+    const filesSummary = sampledRepo.sampledFiles
+      .map((f) => `### ${f.path}\n\`\`\`\n${f.content.slice(0, 1500)}\n\`\`\``)
+      .join('\n\n');
+
+    const treeStr = sampledRepo.fileTree.slice(0, 80).join('\n');
+
+    const systemPrompt = `You are a senior software architect and PM performing a codebase audit.
+
+Analyze the provided code files and return a JSON object with this exact schema:
+{
+  "repoUrl": "<string>",
+  "repoName": "<owner/repo>",
+  "detectedStack": ["<language/framework names>"],
+  "existingFeatures": ["<feature description>"],
+  "technicalDebt": [{ "severity": "CRITICAL|HIGH|MEDIUM|LOW", "description": "<issue>", "file": "<optional path>" }],
+  "securityConcerns": [{ "severity": "CRITICAL|HIGH|MEDIUM|LOW", "description": "<concern>", "file": "<optional path>" }],
+  "improvementAreas": [{ "title": "<area>", "priority": "MUST|SHOULD|COULD|WONT", "estimateHours": <number>, "description": "<detail>" }],
+  "summary": "<2-3 sentence executive summary>",
+  "fileCount": <number>,
+  "sampledFiles": ["<relative paths of files analyzed>"]
+}
+
+Be specific and actionable. Focus on the user's stated intent when prioritising improvements.`;
+
+    const messages: ConversationHistory = [
+      {
+        role: 'user',
+        content: `User's improvement goals: ${userIntent || 'General code quality and best practices improvement'}
+
+Total files in repo: ${sampledRepo.fileCount}
+Files analyzed: ${sampledRepo.sampledFiles.length}
+
+File tree (top 80):
+${treeStr}
+
+---
+Sampled file contents:
+${filesSummary}`,
+        timestamp: new Date(),
+      },
+    ];
+
+    const output = await this.call({ systemPrompt, messages, projectId, maxTokens: 4096 });
+
+    if (!output.success) {
+      throw new Error(`PMAgent.analyzeRepo failed: ${output.error ?? 'unknown'}`);
+    }
+
+    try {
+      return this.parseJSON<RepoAnalysis>(output.content);
+    } catch {
+      throw new Error(`PMAgent.analyzeRepo: failed to parse JSON response`);
+    }
   }
 }
 

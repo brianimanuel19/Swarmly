@@ -1,4 +1,12 @@
-import { AgentRole, Sprint, Task, ConversationHistory, ProjectState } from '../types/index.js';
+import {
+  AgentRole,
+  Sprint,
+  Task,
+  ConversationHistory,
+  ProjectState,
+  RepoAnalysis,
+  ImprovementArea,
+} from '../types/index.js';
 import { BaseAgent } from './base-agent.js';
 import { config } from '../config/config.js';
 
@@ -144,6 +152,57 @@ Respond with JSON: {"approved": boolean, "feedback": "string"}`;
       return this.parseJSON<{ approved: boolean; feedback: string }>(result.content);
     } catch {
       return { approved: true, feedback: result.content };
+    }
+  }
+
+  // ─── Build improvement backlog from repo analysis ─────────────────────────
+
+  async buildImprovementBacklog(params: {
+    analysis: RepoAnalysis;
+    userIntent: string;
+    projectId: string;
+  }): Promise<ImprovementArea[]> {
+    const { analysis, userIntent, projectId } = params;
+
+    const systemPrompt = `You are a Product Owner. Given a codebase analysis, refine and prioritise the improvement backlog.
+
+Rules:
+- Re-evaluate priorities based on the user's stated intent
+- Merge overlapping items
+- Ensure MUST items are achievable in a single sprint
+- Add effort estimates in hours if missing or clearly wrong
+- Return JSON array of ImprovementArea objects
+
+Schema: [{ "title": string, "priority": "MUST|SHOULD|COULD|WONT", "estimateHours": number, "description": string }]`;
+
+    const messages: ConversationHistory = [
+      {
+        role: 'user',
+        content: `User's intent: ${userIntent || 'General improvement'}
+
+Existing improvement areas from PM analysis:
+${JSON.stringify(analysis.improvementAreas, null, 2)}
+
+Technical debt items:
+${analysis.technicalDebt.map((t) => `- [${t.severity}] ${t.description}`).join('\n')}
+
+Security concerns:
+${analysis.securityConcerns.map((s) => `- [${s.severity}] ${s.description}`).join('\n')}`,
+        timestamp: new Date(),
+      },
+    ];
+
+    const output = await this.call({ systemPrompt, messages, projectId, maxTokens: 2048 });
+
+    if (!output.success) {
+      console.warn('[POAgent] buildImprovementBacklog failed, using PM analysis');
+      return analysis.improvementAreas;
+    }
+
+    try {
+      return this.parseJSON<ImprovementArea[]>(output.content);
+    } catch {
+      return analysis.improvementAreas;
     }
   }
 }

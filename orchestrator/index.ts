@@ -336,37 +336,55 @@ export class Orchestrator {
       if (result.type === 'READY_TO_RUN') {
         // Summarise the conversation to get a structured requirement
         const requirement = await pmAgent.summarizeRequirement(history);
+
+        // Detect GitHub URL anywhere in the conversation
+        const { detectGithubUrl, parseGithubUrl } = await import('../integrations/repo-cloner.js');
+        const allText = [...history, { role: 'user' as const, content: msg.text, timestamp: new Date() }]
+          .map((m) => m.content)
+          .join('\n');
+        const sourceRepo = detectGithubUrl(allText);
+
         const detectedStack = await stackDetector.detect(requirement);
-        const projectName =
-          requirement
-            .split('.')[0]
-            ?.replace(/^Build a? /i, '')
-            .trim() ?? 'New Project';
-        const domains = detectedStack.domains.map((d) => String(d));
         const costRange = stackDetector.estimateCost(detectedStack);
         const timeRange = stackDetector.estimateTime(detectedStack);
+
+        let projectName: string;
+        let confirmText: string;
+
+        if (sourceRepo) {
+          const { fullName } = parseGithubUrl(sourceRepo);
+          projectName = `Improve ${fullName.split('/')[1] ?? fullName}`;
+          confirmText = `Ready to analyze and improve *${fullName}*! Please confirm:`;
+        } else {
+          projectName =
+            requirement
+              .split('.')[0]
+              ?.replace(/^Build a? /i, '')
+              .trim() ?? 'New Project';
+          confirmText = `Ready to build *${projectName}*! Please confirm:`;
+        }
+
+        const domains = detectedStack.domains.map((d) => String(d));
 
         const { buildRunConfirmationBlock } = await import('../integrations/slack-messages.js');
         const blocks = buildRunConfirmationBlock({
           projectName,
-          requirement,
+          requirement: sourceRepo
+            ? `Improve existing repo: ${sourceRepo}\n\nGoals: ${requirement}`
+            : requirement,
           domains,
           estimatedCostRange: costRange,
           estimatedTimeRange: timeRange,
         });
 
-        await this.slackListener.postMessage(
-          msg.channelId,
-          `Ready to build *${projectName}*! Please confirm:`,
-          blocks,
-        );
+        await this.slackListener.postMessage(msg.channelId, confirmText, blocks);
 
         // Store the pending project summary for when the user confirms
         this.lobbyConversations.set(`pending:${msg.channelId}:${msg.ts}`, [
           {
             role: 'user',
             content: JSON.stringify({
-              type: 'pending_project',
+              type: sourceRepo ? 'pending_repo_project' : 'pending_project',
               summary: {
                 name: projectName,
                 requirement,
@@ -374,6 +392,7 @@ export class Orchestrator {
                 estimatedCostRange: costRange,
                 estimatedTimeRange: timeRange,
               },
+              sourceRepo: sourceRepo ?? null,
               userId: msg.userId,
               channelId: msg.channelId,
               ts: msg.ts,
@@ -430,6 +449,7 @@ export class Orchestrator {
         estimatedCostRange: string;
         estimatedTimeRange: string;
       };
+      sourceRepo: string | null;
       userId: string;
       channelId: string;
       ts: string;
@@ -464,6 +484,7 @@ export class Orchestrator {
       channelId,
       ts,
       workspaceId: pendingData.workspaceId,
+      ...(pendingData.sourceRepo ? { sourceRepo: pendingData.sourceRepo } : {}),
     }).catch((err) => {
       console.error('[Orchestrator] createAndRunProject error:', err);
       this.webClient.chat
@@ -485,8 +506,9 @@ export class Orchestrator {
     channelId: string;
     ts: string;
     workspaceId: string;
+    sourceRepo?: string;
   }): Promise<void> {
-    const { name, requirement, userId, channelId, ts, workspaceId } = params;
+    const { name, requirement, userId, channelId, ts, workspaceId, sourceRepo } = params;
     const projectId = uuidv4();
     const slug = slugify(name);
 
@@ -496,35 +518,42 @@ export class Orchestrator {
     // Get or create workspace
     const workspace = await workspaceAuth.getOrCreate(workspaceId, workspaceId);
 
-    // Auto-create a dedicated Jira project for this project
+    // Auto-create Jira project (deferred for repo-improvement to after analysis checkpoint)
     const { jiraIntegration } = await import('../integrations/jira.js');
     let jiraProjectKey: string | null = null;
-    try {
-      jiraProjectKey = await jiraIntegration.createProject({
-        name,
-        description: requirement.slice(0, 500),
-      });
-      console.log(`[Orchestrator] Created Jira project: ${jiraProjectKey}`);
-    } catch (err) {
-      console.error('[Orchestrator] createJiraProject error (continuing):', err);
+    if (!sourceRepo) {
+      try {
+        jiraProjectKey = await jiraIntegration.createProject({
+          name,
+          description: requirement.slice(0, 500),
+        });
+        console.log(`[Orchestrator] Created Jira project: ${jiraProjectKey}`);
+      } catch (err) {
+        console.error('[Orchestrator] createJiraProject error (continuing):', err);
+      }
     }
 
-    // Auto-create a dedicated GitHub repo for this project
+    // For repo improvement: reuse the source repo; for greenfield: create a new one
     const { githubIntegration } = await import('../integrations/github.js');
-    let githubRepoFullName: string | null = null;
+    let githubRepoFullName: string | null = sourceRepo
+      ? (() => { try { const u = new URL(sourceRepo); return u.pathname.replace(/^\//, '').replace(/\.git$/, ''); } catch { return null; } })()
+      : null;
     let projectGitHub = githubIntegration;
-    try {
-      const repoName = `swarmly-${slug}-${projectId.slice(0, 6)}`;
-      const created = await githubIntegration.createRepo({
-        name: repoName,
-        description: requirement.slice(0, 100),
-        isPrivate: true,
-      });
-      githubRepoFullName = `${created.owner}/${created.repo}`;
-      projectGitHub = created.integration;
-      console.log(`[Orchestrator] Created GitHub repo: ${githubRepoFullName}`);
-    } catch (err) {
-      console.error('[Orchestrator] createGitHubRepo error (continuing):', err);
+
+    if (!sourceRepo) {
+      try {
+        const repoName = `swarmly-${slug}-${projectId.slice(0, 6)}`;
+        const created = await githubIntegration.createRepo({
+          name: repoName,
+          description: requirement.slice(0, 100),
+          isPrivate: true,
+        });
+        githubRepoFullName = `${created.owner}/${created.repo}`;
+        projectGitHub = created.integration;
+        console.log(`[Orchestrator] Created GitHub repo: ${githubRepoFullName}`);
+      } catch (err) {
+        console.error('[Orchestrator] createGitHubRepo error (continuing):', err);
+      }
     }
 
     // Create project state
@@ -570,6 +599,7 @@ export class Orchestrator {
       createdAt: now,
       updatedAt: now,
       completedAt: null,
+      ...(sourceRepo ? { sourceRepo } : {}),
     };
 
     // Save initial state
