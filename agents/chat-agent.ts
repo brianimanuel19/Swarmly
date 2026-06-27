@@ -22,13 +22,20 @@ const MAX_TOKENS = 512;
 // In-memory thread history: threadKey → messages
 const threadHistories = new Map<string, ConversationHistory>();
 
-function detectRole(text: string): string {
+export function detectRole(text: string): string {
   const lower = text.toLowerCase();
   if (/@pm\b|^pm[,:\s]/i.test(lower)) return 'pm';
   if (/@dev\b|^dev[,:\s]/i.test(lower)) return 'dev';
   if (/@tester\b|^tester[,:\s]/i.test(lower)) return 'tester';
   return 'default';
 }
+
+export const ROLE_IDENTITY: Record<string, { username: string; icon_emoji: string }> = {
+  pm:      { username: 'PM Agent',     icon_emoji: ':memo:' },
+  dev:     { username: 'Dev Agent',    icon_emoji: ':computer:' },
+  tester:  { username: 'Tester Agent', icon_emoji: ':microscope:' },
+  default: { username: 'Swarmly',      icon_emoji: ':robot_face:' },
+};
 
 export async function chatReply(params: {
   threadKey: string;

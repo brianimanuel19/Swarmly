@@ -94,7 +94,7 @@ export class Orchestrator {
       const chatChannelId = config.slack.chatChannelId;
       this.slackListener.setupChatHandler(chatChannelId, async ({ userMessage, userId, channelId }) => {
         try {
-          const { chatReply, clearThread } = await import('../agents/chat-agent.js');
+          const { chatReply, clearThread, detectRole, ROLE_IDENTITY } = await import('../agents/chat-agent.js');
 
           // Per-user history so multiple people can chat independently
           const threadKey = `chat:${channelId}:${userId}`;
@@ -108,11 +108,16 @@ export class Orchestrator {
             return;
           }
 
+          const role = detectRole(userMessage);
+          const identity = ROLE_IDENTITY[role] ?? ROLE_IDENTITY['default']!;
+
           const reply = await chatReply({ threadKey, userMessage, userId });
-          // Post directly in channel — no thread_ts, feels like normal chat
+          // Per-role identity: requires chat:write.customize scope
           await this.webClient.chat.postMessage({
             channel: channelId,
             text: reply,
+            username: identity.username,
+            icon_emoji: identity.icon_emoji,
           });
         } catch (err) {
           console.error('[Orchestrator] chatHandler error:', err);
