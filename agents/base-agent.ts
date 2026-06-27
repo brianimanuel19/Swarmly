@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { AgentRole, AgentOutput, ConversationHistory, TokenUsage } from '../types/index.js';
 import { config } from '../config/config.js';
+import { getProjectContext } from '../orchestrator/project-context.js';
 
 export abstract class BaseAgent {
   protected role: AgentRole;
@@ -55,12 +56,19 @@ export abstract class BaseAgent {
 
     for (let attempt = 0; attempt <= maxRetriesVal; attempt++) {
       try {
-        const response = await this.client.messages.create({
-          model: this.model,
-          max_tokens: maxTokens ?? 8192,
-          system: systemParam,
-          messages: anthropicMessages,
-        });
+        const ctx = getProjectContext();
+        const doCreate = () =>
+          this.client.messages.create({
+            model: this.model,
+            max_tokens: maxTokens ?? 8192,
+            system: systemParam,
+            messages: anthropicMessages,
+          });
+
+        // Route through per-project rate limiter when available
+        const response = ctx
+          ? await ctx.taskQueue.enqueue(doCreate, 0)
+          : await doCreate();
 
         // Extract text content
         const textContent = response.content
@@ -90,6 +98,9 @@ export abstract class BaseAgent {
           totalTokens: inTokens + outTokens,
           estimatedCostUsd: costUsd,
         };
+
+        // Record into per-project tracker when inside a pipeline run
+        ctx?.tokenTracker.record(this.role, this.model, inTokens, outTokens, cacheHits);
 
         console.log(
           `[AGENT] ${this.role} | ${inTokens}in ${outTokens}out | $${costUsd.toFixed(6)}`,

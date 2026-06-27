@@ -29,6 +29,9 @@ import {
   buildRepoAnalysisBlock,
 } from '../integrations/slack-messages.js';
 import { SlackListener } from '../integrations/slack-listener.js';
+import { projectStorage, ProjectContext } from './project-context.js';
+import { TaskQueue } from './task-queue.js';
+import { TokenTracker } from '../cost-control/token-tracker.js';
 
 // ─── Inline agent interfaces (stubs for missing agent files) ──────────────────
 // These interfaces describe the contracts the Pipeline expects from each agent.
@@ -138,6 +141,20 @@ export class Pipeline {
    * @param slackListener - Active SlackListener instance for posting messages
    */
   async run(projectId: string, slackListener: SlackListener): Promise<void> {
+    const ctx: ProjectContext = {
+      projectId,
+      taskQueue: new TaskQueue(),
+      tokenTracker: new TokenTracker(),
+    };
+
+    return projectStorage.run(ctx, () => this._run(projectId, slackListener, ctx));
+  }
+
+  private async _run(
+    projectId: string,
+    slackListener: SlackListener,
+    ctx: ProjectContext,
+  ): Promise<void> {
     // Expose the Slack client to the human-checkpoint singleton
     humanCheckpoint.setSlackClient(
       (slackListener as unknown as { app: { client: unknown } }).app.client as Parameters<
@@ -900,6 +917,8 @@ export class Pipeline {
         `:x: Pipeline failed for *${project.name}*: ${errorMessage}`,
       );
       throw err;
+    } finally {
+      ctx.taskQueue.destroy();
     }
   }
 
@@ -911,15 +930,18 @@ export class Pipeline {
     channelId: string,
     slackListener: SlackListener,
   ): Promise<void> {
-    const { cloneRepo, readRepoFiles, parseGithubUrl } = await import(
+    const { cloneRepo, getAllRepoFilePaths, readFilesChunk, parseGithubUrl } = await import(
       '../integrations/repo-cloner.js'
     );
     const { pmAgent } = await import('../agents/pm-agent.js');
     const poAgent = await loadPOAgent();
+    const fs = await import('fs');
+    const path = await import('path');
 
     const sourceRepo = project.sourceRepo!;
     const { fullName } = parseGithubUrl(sourceRepo);
     const workspaceDir = `${config.sandbox.workspaceBase}/${projectId}`;
+    const specPath = path.join(workspaceDir, 'swarmly-spec.md');
 
     // ── CLONING ─────────────────────────────────────────────────────────────
     await this.handlePhase(projectId, ProjectPhase.CLONING);
@@ -939,24 +961,81 @@ export class Pipeline {
       throw new Error(`[Pipeline] Clone failed for ${sourceRepo}: ${msg}`);
     }
 
-    // ── ANALYZING ───────────────────────────────────────────────────────────
+    // ── ANALYZING — progressive chunked spec build ───────────────────────────
     await this.handlePhase(projectId, ProjectPhase.ANALYZING);
-    await this.postAgentMessage(slackListener, channelId, AgentRole.PM, `Analyzing *${fullName}*…`);
 
-    const sampledRepo = await readRepoFiles(workspaceDir);
+    const allFilePaths = getAllRepoFilePaths(workspaceDir);
+    const fileTree = allFilePaths.slice(0, 300);
+    const CHUNK_SIZE = config.repoAnalysis.maxFiles;
+    const chunks: string[][] = [];
+    for (let i = 0; i < allFilePaths.length; i += CHUNK_SIZE) {
+      chunks.push(allFilePaths.slice(i, i + CHUNK_SIZE));
+    }
+
+    await this.postAgentMessage(
+      slackListener,
+      channelId,
+      AgentRole.PM,
+      `Analyzing *${fullName}* — ${allFilePaths.length} files across ${chunks.length} chunk(s)…`,
+    );
 
     const userIntent = project.requirement.raw;
+    let spec = '';
 
+    for (let i = 0; i < chunks.length; i++) {
+      const chunkFiles = readFilesChunk(
+        chunks[i]!,
+        workspaceDir,
+        config.repoAnalysis.maxFileSizeBytes,
+      );
+
+      await this.postToChannel(
+        slackListener,
+        channelId,
+        `Analyzing chunk ${i + 1}/${chunks.length} (${chunkFiles.length} files)…`,
+      );
+
+      try {
+        spec = await pmAgent.analyzeRepoChunk({
+          chunkFiles,
+          existingSpec: spec,
+          chunkIndex: i + 1,
+          totalChunks: chunks.length,
+          fileTree,
+          userIntent,
+          projectId,
+        });
+
+        // Persist spec to workspace file after each chunk
+        fs.writeFileSync(specPath, spec, 'utf8');
+      } catch (err) {
+        console.warn(`[Pipeline] Chunk ${i + 1} analysis failed: ${(err as Error).message}`);
+      }
+    }
+
+    await this.postAgentMessage(
+      slackListener,
+      channelId,
+      AgentRole.PM,
+      `All ${chunks.length} chunk(s) analyzed. Finalizing structured report…`,
+    );
+
+    // Convert accumulated spec → structured RepoAnalysis JSON
     let analysis: RepoAnalysis;
     try {
-      analysis = await pmAgent.analyzeRepo({ sampledRepo, userIntent, projectId });
+      analysis = await pmAgent.finalizeRepoSpec({
+        spec,
+        repoUrl: sourceRepo,
+        repoName: fullName,
+        fileCount: allFilePaths.length,
+        projectId,
+      });
     } catch (err) {
       await this.postToChannel(
         slackListener,
         channelId,
-        `:warning: Repo analysis failed: ${(err as Error).message}. Continuing with available info.`,
+        `:warning: Failed to finalize analysis: ${(err as Error).message}. Continuing with spec only.`,
       );
-      // Minimal fallback analysis
       analysis = {
         repoUrl: sourceRepo,
         repoName: fullName,
@@ -965,9 +1044,9 @@ export class Pipeline {
         technicalDebt: [],
         securityConcerns: [],
         improvementAreas: [],
-        summary: 'Analysis could not be completed automatically.',
-        fileCount: sampledRepo.fileCount,
-        sampledFiles: sampledRepo.sampledFiles.map((f) => f.path),
+        summary: spec.slice(0, 500),
+        fileCount: allFilePaths.length,
+        sampledFiles: [],
       };
     }
 

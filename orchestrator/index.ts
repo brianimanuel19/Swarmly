@@ -3,7 +3,7 @@ import { SlackListener } from '../integrations/slack-listener.js';
 import { SlackChannelManager } from '../integrations/slack-channels.js';
 import { stackDetector } from './stack-detector.js';
 import { stateStore } from '../memory/state-store.js';
-import { tokenTracker } from '../cost-control/token-tracker.js';
+import { tokenTracker, TokenTracker } from '../cost-control/token-tracker.js';
 import { workspaceAuth } from '../auth/workspace.js';
 import { startDashboard } from '../dashboard/server.js';
 import { config } from '../config/config.js';
@@ -51,6 +51,12 @@ export class Orchestrator {
    * Key: `{channelId}:{threadTs}`
    */
   private lobbyConversations: Map<string, ConversationHistory> = new Map();
+
+  /** Active project count — used for concurrency limit enforcement */
+  private activeProjectCount = 0;
+
+  /** Per-project token trackers keyed by projectId */
+  private projectTrackers: Map<string, TokenTracker> = new Map();
 
   constructor() {
     this.pool = mysql.createPool({
@@ -210,7 +216,9 @@ export class Orchestrator {
           });
           return;
         }
-        const report = tokenTracker.getSprintReport();
+        // Use per-project tracker when available, fall back to global singleton
+        const tracker = this.projectTrackers.get(project.id) ?? tokenTracker;
+        const report = tracker.getSprintReport();
         const lines = Object.entries(report.byAgent).map(
           ([role, usage]) =>
             `• *${role}*: ${usage.totalTokens.toLocaleString()} tokens — ${formatCost(usage.estimatedCostUsd)}`,
@@ -509,7 +517,26 @@ export class Orchestrator {
     sourceRepo?: string;
   }): Promise<void> {
     const { name, requirement, userId, channelId, ts, workspaceId, sourceRepo } = params;
+
+    // ── Concurrency guard ────────────────────────────────────────────────────
+    const limit = config.sandbox.maxConcurrentProjects;
+    if (this.activeProjectCount >= limit) {
+      await this.webClient.chat.postMessage({
+        channel: channelId,
+        thread_ts: ts,
+        text:
+          `Cannot start *${name}* — there ${this.activeProjectCount === 1 ? 'is' : 'are'} already ` +
+          `*${this.activeProjectCount}* project${this.activeProjectCount === 1 ? '' : 's'} running ` +
+          `(limit: ${limit}). Please wait for the current project to finish, then try again.`,
+      });
+      return;
+    }
+
+    this.activeProjectCount++;
     const projectId = uuidv4();
+    const tracker = new TokenTracker();
+    this.projectTrackers.set(projectId, tracker);
+
     const slug = slugify(name);
 
     // Detect stack
@@ -644,16 +671,22 @@ export class Orchestrator {
 
     // Run the full pipeline in background (pipeline uses projectState.jiraProjectKey / githubRepo)
     const { pipeline } = await import('./pipeline.js');
-    pipeline.run(projectId, this.slackListener).catch((err) => {
-      console.error(`[Orchestrator] Pipeline failed for project ${projectId}:`, err);
-      stateStore.updatePhase(projectId, ProjectPhase.FAILED).catch(console.error);
-      this.webClient.chat
-        .postMessage({
-          channel: projectChannelId,
-          text: `Pipeline encountered an error: ${(err as Error).message}. The project has been marked as FAILED.`,
-        })
-        .catch(console.error);
-    });
+    pipeline
+      .run(projectId, this.slackListener)
+      .catch((err) => {
+        console.error(`[Orchestrator] Pipeline failed for project ${projectId}:`, err);
+        stateStore.updatePhase(projectId, ProjectPhase.FAILED).catch(console.error);
+        this.webClient.chat
+          .postMessage({
+            channel: projectChannelId,
+            text: `Pipeline encountered an error: ${(err as Error).message}. The project has been marked as FAILED.`,
+          })
+          .catch(console.error);
+      })
+      .finally(() => {
+        this.activeProjectCount = Math.max(0, this.activeProjectCount - 1);
+        this.projectTrackers.delete(projectId);
+      });
   }
 
   // ─── Mention handler ──────────────────────────────────────────────────────

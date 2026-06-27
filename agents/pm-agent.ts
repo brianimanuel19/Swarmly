@@ -572,6 +572,121 @@ Keep your response under 200 words. Use plain text (Slack mrkdwn ok).`;
     return output.content.trim();
   }
 
+  // ─── Chunked repo analysis — progressive spec building ───────────────────
+
+  async analyzeRepoChunk(params: {
+    chunkFiles: Array<{ path: string; content: string }>;
+    existingSpec: string;
+    chunkIndex: number;
+    totalChunks: number;
+    fileTree: string[];
+    userIntent: string;
+    projectId: string;
+  }): Promise<string> {
+    const { chunkFiles, existingSpec, chunkIndex, totalChunks, fileTree, userIntent, projectId } = params;
+
+    const isFirst = chunkIndex === 1;
+    const filesSummary = chunkFiles
+      .map((f) => `### ${f.path}\n\`\`\`\n${f.content}\n\`\`\``)
+      .join('\n\n');
+
+    const systemPrompt = `You are a senior software architect performing a progressive codebase audit.
+
+You receive the repo in chunks. After each chunk, you update a running Markdown spec document.
+
+Rules:
+- NEVER remove existing findings — only add or refine
+- Keep the spec concise but complete; summarize repetitive patterns rather than listing every file
+- Sections to maintain:
+  ## Architecture Overview
+  ## Tech Stack
+  ## Key Modules (one bullet per significant module/directory)
+  ## Technical Debt (severity: CRITICAL/HIGH/MEDIUM/LOW)
+  ## Security Concerns (severity: CRITICAL/HIGH/MEDIUM/LOW)
+  ## Improvement Areas (priority: MUST/SHOULD/COULD/WONT, estimate hours)
+- If the spec grows beyond 8,000 words, compress older sections while keeping all findings
+- Output ONLY the updated spec markdown — no commentary`;
+
+    const userContent = isFirst
+      ? `User's improvement goals: ${userIntent || 'General code quality improvement'}
+
+Full file tree (${fileTree.length} files total, processing in ${totalChunks} chunk(s)):
+${fileTree.slice(0, 200).join('\n')}
+
+--- CHUNK ${chunkIndex}/${totalChunks} ---
+${filesSummary}
+
+Write the initial spec document based on this first chunk.`
+      : `User's improvement goals: ${userIntent || 'General code quality improvement'}
+
+--- CURRENT SPEC (update this, do not lose findings) ---
+${existingSpec}
+
+--- CHUNK ${chunkIndex}/${totalChunks} — new files to analyze ---
+${filesSummary}
+
+Update the spec with findings from this chunk.`;
+
+    const messages: ConversationHistory = [
+      { role: 'user', content: userContent, timestamp: new Date() },
+    ];
+
+    const output = await this.call({ systemPrompt, messages, projectId, maxTokens: 8192 });
+
+    if (!output.success) {
+      console.warn(`[PMAgent] analyzeRepoChunk ${chunkIndex}/${totalChunks} failed — keeping existing spec`);
+      return existingSpec;
+    }
+
+    return output.content;
+  }
+
+  async finalizeRepoSpec(params: {
+    spec: string;
+    repoUrl: string;
+    repoName: string;
+    fileCount: number;
+    projectId: string;
+  }): Promise<RepoAnalysis> {
+    const { spec, repoUrl, repoName, fileCount, projectId } = params;
+
+    const systemPrompt = `You are converting a Markdown analysis spec into structured JSON.
+
+Extract all findings from the spec and return a JSON object matching this exact schema:
+{
+  "repoUrl": string,
+  "repoName": string,
+  "detectedStack": string[],
+  "existingFeatures": string[],
+  "technicalDebt": [{ "severity": "CRITICAL|HIGH|MEDIUM|LOW", "description": string, "file"?: string }],
+  "securityConcerns": [{ "severity": "CRITICAL|HIGH|MEDIUM|LOW", "description": string, "file"?: string }],
+  "improvementAreas": [{ "title": string, "priority": "MUST|SHOULD|COULD|WONT", "estimateHours": number, "description": string }],
+  "summary": string,
+  "fileCount": number,
+  "sampledFiles": []
+}
+
+Return ONLY the JSON object — no markdown, no commentary.`;
+
+    const messages: ConversationHistory = [
+      {
+        role: 'user',
+        content: `Convert this spec to JSON. repoUrl="${repoUrl}", repoName="${repoName}", fileCount=${fileCount}.\n\nSpec:\n${spec}`,
+        timestamp: new Date(),
+      },
+    ];
+
+    const output = await this.call({ systemPrompt, messages, projectId, maxTokens: 4096 });
+
+    if (!output.success) throw new Error(`PMAgent.finalizeRepoSpec failed: ${output.error}`);
+
+    try {
+      return this.parseJSON<RepoAnalysis>(output.content);
+    } catch {
+      throw new Error('PMAgent.finalizeRepoSpec: failed to parse JSON');
+    }
+  }
+
   // ─── Analyze an existing repo ─────────────────────────────────────────────
 
   async analyzeRepo(params: {

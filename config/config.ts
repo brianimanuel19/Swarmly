@@ -74,6 +74,7 @@ export interface SandboxConfig {
   dockerSocket: string;
   workspaceBase: string;
   maxConcurrent: number;
+  maxConcurrentProjects: number;
   timeoutMs: number;
   memoryLimitMb: number;
   cpuQuota: number;
@@ -91,6 +92,7 @@ export interface CheckpointsConfig {
 
 export interface RepoAnalysisConfig {
   maxFiles: number;
+  maxFilesPerDir: number;
   maxFileSizeBytes: number;
   requireCheckpoint: boolean;
 }
@@ -192,6 +194,8 @@ export const config: AppConfig = {
     dockerSocket: '/var/run/docker.sock',
     workspaceBase: '/tmp/swarmly-workspaces',
     maxConcurrent: 5,
+    // Raise to 3-5 when server resources allow
+    maxConcurrentProjects: 1,
     timeoutMs: 300_000,
     memoryLimitMb: 512,
     cpuQuota: 50000,
@@ -208,7 +212,8 @@ export const config: AppConfig = {
   },
 
   repoAnalysis: {
-    maxFiles: 80,
+    maxFiles: 300,
+    maxFilesPerDir: 20,
     maxFileSizeBytes: 50_000,
     requireCheckpoint: true,
   },

@@ -107,29 +107,107 @@ function walkDir(dir: string, baseDir: string, results: string[]): void {
   }
 }
 
+export function getAllRepoFilePaths(repoPath: string): string[] {
+  const allFiles: string[] = [];
+  walkDir(repoPath, repoPath, allFiles);
+  allFiles.sort((a, b) => filePriority(a) - filePriority(b));
+  return allFiles;
+}
+
+export function readFilesChunk(
+  relPaths: string[],
+  repoPath: string,
+  maxFileSizeBytes: number,
+): Array<{ path: string; content: string }> {
+  const result: Array<{ path: string; content: string }> = [];
+
+  for (const relPath of relPaths) {
+    const fullPath = path.join(repoPath, relPath);
+    const priority = filePriority(relPath);
+    const charCap =
+      priority < 2 ? Infinity :
+      priority < 4 ? 5_000 :
+                     2_000;
+
+    try {
+      const stat = fs.statSync(fullPath);
+      if (stat.size > maxFileSizeBytes && charCap === Infinity) {
+        const raw = fs.readFileSync(fullPath, 'utf8');
+        result.push({ path: relPath, content: raw.slice(0, 5_000) + '\n... (truncated)' });
+        continue;
+      }
+      if (stat.size > maxFileSizeBytes) continue;
+
+      const raw = fs.readFileSync(fullPath, 'utf8');
+      const content = raw.length > charCap ? raw.slice(0, charCap) + '\n... (truncated)' : raw;
+      result.push({ path: relPath, content });
+    } catch {
+      // skip
+    }
+  }
+
+  return result;
+}
+
 export async function readRepoFiles(repoPath: string): Promise<SampledRepo> {
-  const { maxFiles, maxFileSizeBytes } = config.repoAnalysis;
+  const { maxFiles, maxFilesPerDir, maxFileSizeBytes } = config.repoAnalysis;
 
   const allFiles: string[] = [];
   walkDir(repoPath, repoPath, allFiles);
   allFiles.sort((a, b) => filePriority(a) - filePriority(b));
 
-  const fileTree = allFiles.slice(0, 200);
-  const toSample = allFiles.slice(0, maxFiles);
+  const fileTree = allFiles.slice(0, 300);
+
+  // Breadth-first cap: limit files per directory to ensure coverage across the whole repo
+  const dirCounts = new Map<string, number>();
+  const toSample: string[] = [];
+
+  for (const relPath of allFiles) {
+    if (toSample.length >= maxFiles) break;
+
+    const dir = path.dirname(relPath);
+    const priority = filePriority(relPath);
+
+    // Root-level config files (priority < 3) always included — no per-dir cap
+    if (priority < 3) {
+      toSample.push(relPath);
+      continue;
+    }
+
+    const count = dirCounts.get(dir) ?? 0;
+    if (count >= maxFilesPerDir) continue;
+
+    dirCounts.set(dir, count + 1);
+    toSample.push(relPath);
+  }
+
   const sampledFiles: Array<{ path: string; content: string }> = [];
 
   for (const relPath of toSample) {
     const fullPath = path.join(repoPath, relPath);
+    const priority = filePriority(relPath);
+
+    // Tiered char cap — keeps total tokens within Sonnet's 200K context
+    // priority 0-1 (root configs, README): up to full file
+    // priority 2-3 (CI, entry points):     5,000 chars
+    // priority 4+  (source files):         2,000 chars
+    const charCap =
+      priority < 2 ? Infinity :
+      priority < 4 ? 5_000 :
+                     2_000;
+
     try {
       const stat = fs.statSync(fullPath);
-      if (stat.size > maxFileSizeBytes) {
-        if (filePriority(relPath) < 4) {
-          const raw = fs.readFileSync(fullPath, 'utf8');
-          sampledFiles.push({ path: relPath, content: raw.slice(0, 2000) + '\n... (truncated)' });
-        }
+      if (stat.size > maxFileSizeBytes && charCap === Infinity) {
+        // Very large root config — include truncated
+        const raw = fs.readFileSync(fullPath, 'utf8');
+        sampledFiles.push({ path: relPath, content: raw.slice(0, 5_000) + '\n... (truncated)' });
         continue;
       }
-      const content = fs.readFileSync(fullPath, 'utf8');
+      if (stat.size > maxFileSizeBytes) continue; // large source file — skip
+
+      const raw = fs.readFileSync(fullPath, 'utf8');
+      const content = raw.length > charCap ? raw.slice(0, charCap) + '\n... (truncated)' : raw;
       sampledFiles.push({ path: relPath, content });
     } catch {
       // skip unreadable
