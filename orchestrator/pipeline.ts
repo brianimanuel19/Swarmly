@@ -1104,27 +1104,38 @@ export class Pipeline {
       chunks.push(allFilePaths.slice(i, i + CHUNK_SIZE));
     }
 
-    await this.postAgentMessage(
-      slackListener,
-      channelId,
-      AgentRole.PM,
-      `Analyzing *${fullName}* — ${allFilePaths.length} files across ${chunks.length} chunk(s)…`,
-    );
-
     const userIntent = project.requirement.raw;
     let spec = '';
+    const analysisStartMs = Date.now();
+
+    // Post a single progress message and update it in-place after each chunk
+    const progressBar = (done: number, total: number): string => {
+      const filled = Math.round((done / total) * 12);
+      return '▓'.repeat(filled) + '░'.repeat(12 - filled);
+    };
+
+    const progressText = (done: number, elapsedMs: number): string => {
+      const total = chunks.length;
+      const pct = total === 0 ? 100 : Math.round((done / total) * 100);
+      const bar = progressBar(done, total);
+      const elapsed = Math.round(elapsedMs / 1000);
+      const estTotal = done > 0 ? Math.round((elapsedMs / done) * total / 1000) : null;
+      const etaStr = estTotal !== null && done < total
+        ? `  •  ETA ~${Math.max(0, estTotal - elapsed)}s`
+        : '';
+      return (
+        `*PM Agent* is analyzing *${fullName}*\n` +
+        `${bar}  ${done}/${total} chunks  (${pct}%)  •  ${allFilePaths.length} files${etaStr}`
+      );
+    };
+
+    const progressTs = await slackListener.postMessage(channelId, progressText(0, 0));
 
     for (let i = 0; i < chunks.length; i++) {
       const chunkFiles = readFilesChunk(
         chunks[i]!,
         workspaceDir,
         config.repoAnalysis.maxFileSizeBytes,
-      );
-
-      await this.postToChannel(
-        slackListener,
-        channelId,
-        `Analyzing chunk ${i + 1}/${chunks.length} (${chunkFiles.length} files)…`,
       );
 
       try {
@@ -1143,13 +1154,16 @@ export class Pipeline {
       } catch (err) {
         console.warn(`[Pipeline] Chunk ${i + 1} analysis failed: ${(err as Error).message}`);
       }
+
+      // Update progress bar in-place
+      await slackListener.updateMessage(channelId, progressTs, progressText(i + 1, Date.now() - analysisStartMs));
     }
 
-    await this.postAgentMessage(
-      slackListener,
+    // Mark analysis done
+    await slackListener.updateMessage(
       channelId,
-      AgentRole.PM,
-      `All ${chunks.length} chunk(s) analyzed. Finalizing structured report…`,
+      progressTs,
+      `✅ *PM Agent* finished analyzing *${fullName}* — ${allFilePaths.length} files across ${chunks.length} chunk(s). Finalizing report…`,
     );
 
     // Convert accumulated spec → structured RepoAnalysis JSON
