@@ -912,7 +912,28 @@ export class Orchestrator {
 
     const { humanCheckpoint } = await import('./human-checkpoint.js');
     if (approved) {
-      humanCheckpoint.handleApproval(projectId, userId);
+      const resolved = humanCheckpoint.handleApproval(projectId, userId);
+      if (!resolved) {
+        // No pipeline is waiting — try to auto-start it (e.g. after container restart)
+        const project = await stateStore.loadProject(projectId);
+        const resumable = [ProjectPhase.ANALYZING, ProjectPhase.PAUSED, ProjectPhase.FAILED];
+        if (project && resumable.includes(project.phase)) {
+          await this.webClient.chat.postMessage({
+            channel: channelId,
+            thread_ts: ts,
+            text: 'Pipeline was not running — restarting now…',
+          });
+          await this.handleResumeProject(projectId, project.slackProjectChannelId || channelId);
+          return;
+        }
+        // Project already done or actively running — just ack
+        await this.webClient.chat.postMessage({
+          channel: channelId,
+          thread_ts: ts,
+          text: 'No pending checkpoint found (pipeline may already be running or completed).',
+        });
+        return;
+      }
     } else {
       humanCheckpoint.handleRejection(projectId, userId, 'Rejected via Slack');
     }

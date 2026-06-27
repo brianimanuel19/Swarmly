@@ -175,11 +175,11 @@ export class HumanCheckpoint {
    * Called by the Slack action handler when a user clicks the Approve button.
    * Resolves the pending checkpoint Promise for the given projectId.
    */
-  handleApproval(projectId: string, userId: string): void {
+  handleApproval(projectId: string, userId: string): boolean {
     const checkpoint = this.pending.get(projectId);
     if (!checkpoint) {
       console.warn(`[HumanCheckpoint] handleApproval: no pending checkpoint for ${projectId}`);
-      return;
+      return false;
     }
 
     clearInterval(checkpoint.reminderHandle);
@@ -194,6 +194,7 @@ export class HumanCheckpoint {
       userId,
       timestamp: new Date(),
     });
+    return true;
   }
 
   // ─── handleRejection ───────────────────────────────────────────────────────
