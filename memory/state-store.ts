@@ -309,6 +309,33 @@ export class StateStore {
   }
 
   // -------------------------------------------------------------------------
+  // savePendingProject / loadPendingProject / deletePendingProject
+  // Persist lobby confirmation state so it survives container restarts.
+  // -------------------------------------------------------------------------
+  async savePendingProject(key: string, data: unknown): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO pending_projects (pending_key, data, created_at)
+       VALUES (?, ?, NOW(3))
+       ON DUPLICATE KEY UPDATE data = VALUES(data), created_at = NOW(3)`,
+      [key, JSON.stringify(data)],
+    );
+  }
+
+  async loadPendingProject(key: string): Promise<unknown | null> {
+    const [rows] = await this.pool.query<RowDataPacket[]>(
+      'SELECT data FROM pending_projects WHERE pending_key = ? LIMIT 1',
+      [key],
+    );
+    if (rows.length === 0) return null;
+    const raw = rows[0]!['data'];
+    return typeof raw === 'string' ? JSON.parse(raw) : raw;
+  }
+
+  async deletePendingProject(key: string): Promise<void> {
+    await this.pool.query('DELETE FROM pending_projects WHERE pending_key = ?', [key]);
+  }
+
+  // -------------------------------------------------------------------------
   // logTokenUsage
   // -------------------------------------------------------------------------
   async logTokenUsage(

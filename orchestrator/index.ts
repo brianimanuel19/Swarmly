@@ -315,8 +315,8 @@ export class Orchestrator {
     // If this thread already has a pending project awaiting confirmation, handle it
     // directly instead of re-entering chatInLobby (which would loop READY_TO_RUN).
     const pendingKey = `pending:${threadKey}`;
-    const pendingHistory = this.lobbyConversations.get(pendingKey);
-    if (pendingHistory && pendingHistory.length > 0) {
+    const pendingHistory = await stateStore.loadPendingProject(pendingKey);
+    if (pendingHistory !== null) {
       const isConfirm = /^\s*(yes|yes[,!.]|yeah|yep|ok|okay|sure|ready|có|đồng ý|bắt đầu|go|let'?s go|ready to build)\s*$/i.test(
         msg.text.trim(),
       );
@@ -411,28 +411,16 @@ export class Orchestrator {
 
         await this.slackListener.replyInThread(msg.channelId, msg.ts, confirmText, blocks);
 
-        // Store the pending project summary for when the user confirms
-        this.lobbyConversations.set(`pending:${msg.channelId}:${msg.ts}`, [
-          {
-            role: 'user',
-            content: JSON.stringify({
-              type: sourceRepo ? 'pending_repo_project' : 'pending_project',
-              summary: {
-                name: projectName,
-                requirement,
-                domains,
-                estimatedCostRange: costRange,
-                estimatedTimeRange: timeRange,
-              },
-              sourceRepo: sourceRepo ?? null,
-              userId: msg.userId,
-              channelId: msg.channelId,
-              ts: msg.ts,
-              workspaceId: msg.workspaceId,
-            }),
-            timestamp: new Date(),
-          },
-        ]);
+        // Persist pending project to DB so it survives container restarts
+        await stateStore.savePendingProject(`pending:${msg.channelId}:${msg.ts}`, {
+          type: sourceRepo ? 'pending_repo_project' : 'pending_project',
+          summary: { name: projectName, requirement, domains, estimatedCostRange: costRange, estimatedTimeRange: timeRange },
+          sourceRepo: sourceRepo ?? null,
+          userId: msg.userId,
+          channelId: msg.channelId,
+          ts: msg.ts,
+          workspaceId: msg.workspaceId,
+        });
       }
     } catch (err) {
       console.error('[Orchestrator] handleLobbyMessage error:', err);
@@ -452,10 +440,10 @@ export class Orchestrator {
     ts: string,
     userId: string,
   ): Promise<void> {
-    const pendingHistory = this.lobbyConversations.get(pendingKey);
-    if (!pendingHistory || pendingHistory.length === 0) return;
+    const raw = await stateStore.loadPendingProject(pendingKey);
+    if (raw === null) return;
 
-    let pendingData: {
+    const pendingData = raw as {
       type: string;
       summary: { name: string; requirement: string; domains: string[]; estimatedCostRange: string; estimatedTimeRange: string };
       sourceRepo: string | null;
@@ -465,14 +453,7 @@ export class Orchestrator {
       workspaceId: string;
     };
 
-    try {
-      pendingData = JSON.parse(pendingHistory[0]?.content ?? '{}');
-    } catch {
-      await this.slackListener.replyInThread(channelId, ts, 'Failed to parse project details. Please try again.');
-      return;
-    }
-
-    this.lobbyConversations.delete(pendingKey);
+    await stateStore.deletePendingProject(pendingKey);
 
     await this.webClient.chat.postMessage({
       channel: channelId,
@@ -513,9 +494,9 @@ export class Orchestrator {
 
     // Find the pending project
     const pendingKey = `pending:${channelId}:${ts}`;
-    const pendingHistory = this.lobbyConversations.get(pendingKey);
+    const raw = await stateStore.loadPendingProject(pendingKey);
 
-    if (!pendingHistory || pendingHistory.length === 0) {
+    if (raw === null) {
       await this.webClient.chat.postMessage({
         channel: channelId,
         thread_ts: ts,
@@ -524,15 +505,9 @@ export class Orchestrator {
       return;
     }
 
-    let pendingData: {
+    const pendingData = raw as {
       type: string;
-      summary: {
-        name: string;
-        requirement: string;
-        domains: string[];
-        estimatedCostRange: string;
-        estimatedTimeRange: string;
-      };
+      summary: { name: string; requirement: string; domains: string[]; estimatedCostRange: string; estimatedTimeRange: string };
       sourceRepo: string | null;
       userId: string;
       channelId: string;
@@ -540,19 +515,7 @@ export class Orchestrator {
       workspaceId: string;
     };
 
-    try {
-      const rawContent = pendingHistory[0]?.content ?? '{}';
-      pendingData = JSON.parse(rawContent);
-    } catch {
-      await this.webClient.chat.postMessage({
-        channel: channelId,
-        thread_ts: ts,
-        text: 'Failed to parse project details. Please try again.',
-      });
-      return;
-    }
-
-    this.lobbyConversations.delete(pendingKey);
+    await stateStore.deletePendingProject(pendingKey);
 
     await this.webClient.chat.postMessage({
       channel: channelId,
