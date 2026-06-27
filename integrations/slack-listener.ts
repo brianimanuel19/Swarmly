@@ -96,7 +96,7 @@ export class SlackListener {
         text: message.text,
         userId: message.user,
         channelId: message.channel,
-        ts: message.ts,
+        ts: threadTs,   // always use thread root ts so all messages in a thread share the same key
         history,
         workspaceId: message.team ?? '',
       };
