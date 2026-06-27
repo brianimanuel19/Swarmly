@@ -257,25 +257,23 @@ export class Pipeline {
           `User goals: ${project.requirement.raw}`
         : project.requirement.raw;
 
-      const rawPrd = await pmAgent.createPRD(prdInput, context.pmSystemPrompt, projectId);
+      const rawPrd = await this.withLiveMessage(
+        slackListener, channelId, AgentRole.PM,
+        'Writing PRD…',
+        () => pmAgent.createPRD(prdInput, context.pmSystemPrompt, projectId),
+        (prd) => `PRD written (${prd.length} chars)`,
+      );
 
-      // PO refines the PRD: adds MoSCoW backlog and sharpens acceptance criteria
-      await this.postAgentMessage(slackListener, channelId, AgentRole.PO, 'Reviewing and refining the PRD…');
-      const prd = await poAgent.refinePRD({
-        prd: rawPrd,
-        requirement: project.requirement.raw,
-        projectId,
-      });
+      const prd = await this.withLiveMessage(
+        slackListener, channelId, AgentRole.PO,
+        'Reviewing and refining the PRD…',
+        () => poAgent.refinePRD({ prd: rawPrd, requirement: project.requirement.raw, projectId }),
+        () => 'PRD refined. Waiting for human review…',
+      );
 
       project.prd = prd;
       project.updatedAt = new Date();
       await stateStore.saveProject(project);
-
-      await this.postToChannel(
-        slackListener,
-        channelId,
-        `PRD created (${prd.length} chars). Waiting for human review…`,
-      );
 
       // Human checkpoint: PRD review
       if (config.checkpoints.requireAfterPRD) {
@@ -308,30 +306,23 @@ export class Pipeline {
         }
       }
 
-      // Create sprint plan (PM)
-      const rawSprint = await pmAgent.createSprintPlan(
-        project.prd,
-        stack,
-        context.pmSystemPrompt,
-        projectId,
+      const rawSprint = await this.withLiveMessage(
+        slackListener, channelId, AgentRole.PM,
+        'Planning sprint…',
+        () => pmAgent.createSprintPlan(project.prd, stack, context.pmSystemPrompt, projectId),
+        (s) => `Sprint plan drafted — ${s.tasks.length} task(s)`,
       );
 
-      // PO prioritises the backlog using MoSCoW
-      const sprint = await poAgent.prioritiseSprint({
-        sprint: rawSprint,
-        prd: project.prd,
-        projectId,
-      });
+      const sprint = await this.withLiveMessage(
+        slackListener, channelId, AgentRole.PO,
+        'Prioritising backlog (MoSCoW)…',
+        () => poAgent.prioritiseSprint({ sprint: rawSprint, prd: project.prd, projectId }),
+        (s) => `Sprint ready: *${s.goal}* — ${s.tasks.length} task(s)`,
+      );
 
       project.sprint = sprint;
       project.updatedAt = new Date();
       await stateStore.saveProject(project);
-
-      await this.postToChannel(
-        slackListener,
-        channelId,
-        `Sprint planned: *${sprint.goal}* — ${sprint.tasks.length} task(s) (PO-prioritised)`,
-      );
 
       // Create Jira sprint and tasks
       let jiraSprintId = project.jiraSprintId;
@@ -492,11 +483,11 @@ export class Pipeline {
         await stateStore.updateSprint(projectId, sprint);
 
         const isInfraTask = task.type === 'INFRA' || task.type === 'DEVOPS';
-        await this.postAgentMessage(
+        const taskMsgTs = await this.postAgentMessage(
           slackListener,
           channelId,
           isInfraTask ? AgentRole.DEVOPS : AgentRole.DEV,
-          `Working on: *${task.title}* (${task.type} | ${task.priority})`,
+          `⏳ Working on: *${task.title}* (${task.type} | ${task.priority})`,
         );
 
         let taskDone = false;
@@ -631,6 +622,18 @@ export class Pipeline {
             await stateStore.updateSprint(projectId, sprint);
             progressWriter.write({ ...currentProject, sprint });
 
+            // Update the task's Slack message in-place to show completion
+            if (taskMsgTs) {
+              const doneRole = isInfraTask ? AgentRole.DEVOPS : AgentRole.DEV;
+              const doneText = `✅ Done: *${task.title}* — ${codeOutput.files.length} file(s) written`;
+              try {
+                await slackListener.updateMessage(
+                  channelId, taskMsgTs, doneText,
+                  buildAgentMessage(doneText, doneRole) as Parameters<typeof slackListener.postMessage>[2],
+                );
+              } catch { /* non-critical */ }
+            }
+
             // Update Jira
             try {
               if (task.jiraId) {
@@ -690,11 +693,12 @@ export class Pipeline {
       // Generate test plan
       let testPlan: TestPlan;
       try {
-        testPlan = await testerAgent.generateTestPlan({
-          sprint,
-          systemPrompt: context.testerSystemPrompt,
-          projectId,
-        });
+        testPlan = await this.withLiveMessage(
+          slackListener, channelId, AgentRole.TESTER,
+          'Generating test plan…',
+          () => testerAgent.generateTestPlan({ sprint, systemPrompt: context.testerSystemPrompt, projectId }),
+          (plan) => `Test plan ready — ${plan.unitTests.length + plan.integrationTests.length + plan.e2eTests.length} test(s)`,
+        );
       } catch (err: unknown) {
         console.warn(`[Pipeline] Test plan generation failed: ${(err as Error).message}`);
         testPlan = { unitTests: [], integrationTests: [], e2eTests: [] };
@@ -1077,11 +1081,14 @@ export class Pipeline {
 
     // ── CLONING ─────────────────────────────────────────────────────────────
     await this.handlePhase(projectId, ProjectPhase.CLONING);
-    await this.postToChannel(slackListener, channelId, `Cloning *${fullName}*…`);
 
     try {
-      await cloneRepo(sourceRepo, workspaceDir, config.github.token);
-      await this.postToChannel(slackListener, channelId, `Repo cloned. Scanning files…`);
+      await this.withLiveMessage(
+        slackListener, channelId, null,
+        `Cloning *${fullName}*…`,
+        () => cloneRepo(sourceRepo, workspaceDir, config.github.token),
+        () => `Cloned *${fullName}*. Scanning files…`,
+      );
     } catch (err) {
       const msg = (err as Error).message;
       await this.postToChannel(
@@ -1300,6 +1307,46 @@ export class Pipeline {
     console.log(`[Pipeline] Project ${projectId} → Phase: ${phase}`);
   }
 
+  // ─── withLiveMessage ──────────────────────────────────────────────────────
+
+  /**
+   * Post a "working…" message, run `work`, then update the same message in-place.
+   * Returns the work result. Never throws from the Slack layer.
+   */
+  private async withLiveMessage<T>(
+    slackListener: SlackListener,
+    channelId: string,
+    role: AgentRole | null,
+    startText: string,
+    work: () => Promise<T>,
+    doneText: (result: T) => string,
+  ): Promise<T> {
+    let ts: string | null = null;
+    try {
+      const blocks = role
+        ? (buildAgentMessage(`⏳ ${startText}`, role) as Parameters<typeof slackListener.postMessage>[2])
+        : undefined;
+      ts = await slackListener.postMessage(channelId, `⏳ ${startText}`, blocks);
+    } catch {
+      // posting failed — continue without live updates
+    }
+
+    const result = await work();
+
+    if (ts) {
+      try {
+        const doneBlocks = role
+          ? (buildAgentMessage(`✅ ${doneText(result)}`, role) as Parameters<typeof slackListener.postMessage>[2])
+          : undefined;
+        await slackListener.updateMessage(channelId, ts, `✅ ${doneText(result)}`, doneBlocks);
+      } catch {
+        // update failed — not critical
+      }
+    }
+
+    return result;
+  }
+
   // ─── postToChannel ─────────────────────────────────────────────────────────
 
   /**
@@ -1326,15 +1373,16 @@ export class Pipeline {
     channelId: string,
     role: AgentRole,
     text: string,
-  ): Promise<void> {
+  ): Promise<string | null> {
     try {
-      await slackListener.postMessage(
+      return await slackListener.postMessage(
         channelId,
         text,
         buildAgentMessage(text, role) as Parameters<typeof slackListener.postMessage>[2],
       );
     } catch (err: unknown) {
       console.warn(`[Pipeline] postAgentMessage failed: ${(err as Error).message}`);
+      return null;
     }
   }
 
