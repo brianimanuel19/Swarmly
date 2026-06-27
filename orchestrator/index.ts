@@ -82,13 +82,27 @@ export class Orchestrator {
   // ─── Public: start Slack mode ─────────────────────────────────────────────
 
   async startSlackMode(): Promise<void> {
-    // 1. Test DB connection
+    // 1. Test DB connection + run pending migrations
+    let conn: import('mysql2/promise').Connection | null = null;
     try {
       await this.pool.query('SELECT 1 AS ok');
       console.log('[Orchestrator] DB connection OK');
+
+      conn = await (await import('mysql2/promise')).createConnection({
+        host: config.db.host,
+        port: config.db.port,
+        user: config.db.user,
+        password: config.db.password,
+        database: config.db.database,
+        multipleStatements: false,
+      });
+      const { runMigrations } = await import('../memory/migrator.js');
+      await runMigrations(conn);
     } catch (err) {
       console.error('[Orchestrator] DB connection FAILED:', err);
       throw err;
+    } finally {
+      await conn?.end().catch(() => {});
     }
 
     // 2. Initialise Slack clients
