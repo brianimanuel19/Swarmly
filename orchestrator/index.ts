@@ -409,7 +409,7 @@ export class Orchestrator {
           estimatedTimeRange: timeRange,
         });
 
-        await this.slackListener.postMessage(msg.channelId, confirmText, blocks);
+        await this.slackListener.replyInThread(msg.channelId, msg.ts, confirmText, blocks);
 
         // Store the pending project summary for when the user confirms
         this.lobbyConversations.set(`pending:${msg.channelId}:${msg.ts}`, [
