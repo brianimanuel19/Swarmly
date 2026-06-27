@@ -125,7 +125,7 @@ export const config: AppConfig = {
       dev: 'claude-sonnet-4-6',
       tester: 'claude-haiku-4-5-20251001',
       testerComplex: 'claude-sonnet-4-6',
-      lobby: 'claude-haiku-4-5-20251001',
+      lobby: 'claude-sonnet-4-6',
       devops: 'claude-sonnet-4-6',
       po: 'claude-sonnet-4-6',
     },

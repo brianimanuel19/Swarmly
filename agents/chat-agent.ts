@@ -3,7 +3,7 @@ import { config } from '../config/config.js';
 import type { ConversationHistory } from '../types/index.js';
 
 // ---------------------------------------------------------------------------
-// Cost-optimised chat agent — Haiku only, no project flow, no DB writes
+// Chat agent — no project flow, no DB writes
 // ---------------------------------------------------------------------------
 
 const client = new Anthropic({ apiKey: config.anthropic.apiKey, baseURL: config.anthropic.baseUrl });
@@ -153,7 +153,7 @@ export async function chatReply(params: {
 
   try {
     const response = await client.messages.create({
-      model: config.anthropic.models.lobby, // Haiku
+      model: config.anthropic.models.lobby,
       max_tokens: MAX_TOKENS,
       system: systemPrompt,
       messages,
