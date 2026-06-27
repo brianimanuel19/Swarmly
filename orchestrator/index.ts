@@ -312,6 +312,28 @@ export class Orchestrator {
   private async handleLobbyMessage(msg: LobbyMessage): Promise<void> {
     const threadKey = `${msg.channelId}:${msg.ts}`;
 
+    // If this thread already has a pending project awaiting confirmation, handle it
+    // directly instead of re-entering chatInLobby (which would loop READY_TO_RUN).
+    const pendingKey = `pending:${threadKey}`;
+    const pendingHistory = this.lobbyConversations.get(pendingKey);
+    if (pendingHistory && pendingHistory.length > 0) {
+      const isConfirm = /^\s*(yes|yes[,!.]|yeah|yep|ok|okay|sure|ready|có|đồng ý|bắt đầu|go|let'?s go|ready to build)\s*$/i.test(
+        msg.text.trim(),
+      );
+      if (isConfirm) {
+        // Delegate to the same logic as the button click
+        await this.handleRunConfirmFromText(pendingKey, msg.channelId, msg.ts, msg.userId);
+      } else {
+        // User is chatting while project is pending — remind them to click the button
+        await this.slackListener.replyInThread(
+          msg.channelId,
+          msg.ts,
+          'Dự án đang chờ xác nhận. Nhấn nút *[Run Project]* ở trên để bắt đầu, hoặc nói "cancel" để huỷ.',
+        );
+      }
+      return;
+    }
+
     // Load or initialise conversation history for this thread
     let history = this.lobbyConversations.get(threadKey) ?? (msg.history as ConversationHistory);
 
@@ -420,6 +442,58 @@ export class Orchestrator {
         'Sorry, I ran into an issue processing your request. Please try again.',
       );
     }
+  }
+
+  // ─── Run confirm via text reply ("yes", "có", etc.) ─────────────────────
+
+  private async handleRunConfirmFromText(
+    pendingKey: string,
+    channelId: string,
+    ts: string,
+    userId: string,
+  ): Promise<void> {
+    const pendingHistory = this.lobbyConversations.get(pendingKey);
+    if (!pendingHistory || pendingHistory.length === 0) return;
+
+    let pendingData: {
+      type: string;
+      summary: { name: string; requirement: string; domains: string[]; estimatedCostRange: string; estimatedTimeRange: string };
+      sourceRepo: string | null;
+      userId: string;
+      channelId: string;
+      ts: string;
+      workspaceId: string;
+    };
+
+    try {
+      pendingData = JSON.parse(pendingHistory[0]?.content ?? '{}');
+    } catch {
+      await this.slackListener.replyInThread(channelId, ts, 'Failed to parse project details. Please try again.');
+      return;
+    }
+
+    this.lobbyConversations.delete(pendingKey);
+
+    await this.webClient.chat.postMessage({
+      channel: channelId,
+      thread_ts: ts,
+      text: `Got it! Starting the project *${pendingData.summary.name}*...`,
+    });
+
+    this.createAndRunProject({
+      name: pendingData.summary.name,
+      requirement: pendingData.summary.requirement,
+      userId: userId || pendingData.userId,
+      channelId,
+      ts,
+      workspaceId: pendingData.workspaceId,
+      ...(pendingData.sourceRepo ? { sourceRepo: pendingData.sourceRepo } : {}),
+    }).catch((err) => {
+      console.error('[Orchestrator] createAndRunProject error:', err);
+      this.webClient.chat
+        .postMessage({ channel: channelId, thread_ts: ts, text: `Failed to start project: ${(err as Error).message}` })
+        .catch(console.error);
+    });
   }
 
   // ─── Run confirm handler ──────────────────────────────────────────────────
