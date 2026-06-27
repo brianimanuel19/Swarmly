@@ -789,11 +789,23 @@ export class Orchestrator {
       return;
     }
 
-    const resumablePhases = [ProjectPhase.PAUSED, ProjectPhase.ANALYZING, ProjectPhase.FAILED];
+    const resumablePhases = [
+      ProjectPhase.PAUSED, ProjectPhase.ANALYZING, ProjectPhase.FAILED,
+      ProjectPhase.CLONING, ProjectPhase.DETECTING, ProjectPhase.PLANNING,
+    ];
     if (!resumablePhases.includes(project.phase)) {
       await this.webClient.chat.postMessage({
         channel: channelId,
         text: `Project *${project.name}* cannot be resumed from phase: ${project.phase}.`,
+      });
+      return;
+    }
+
+    // Guard against duplicate pipelines
+    if (this.activeProjectCount > 0) {
+      await this.webClient.chat.postMessage({
+        channel: channelId,
+        text: `A pipeline is already running (${this.activeProjectCount} active). Wait for it to finish or restart the container.`,
       });
       return;
     }
@@ -930,7 +942,11 @@ export class Orchestrator {
       if (!resolved) {
         // No pipeline is waiting — try to auto-start it (e.g. after container restart)
         const project = await stateStore.loadProject(projectId);
-        const resumable = [ProjectPhase.ANALYZING, ProjectPhase.PAUSED, ProjectPhase.FAILED];
+        const resumable = [
+        ProjectPhase.ANALYZING, ProjectPhase.CLONING,
+        ProjectPhase.DETECTING, ProjectPhase.PLANNING,
+        ProjectPhase.PAUSED, ProjectPhase.FAILED,
+      ];
         if (project && resumable.includes(project.phase)) {
           await this.webClient.chat.postMessage({
             channel: channelId,
