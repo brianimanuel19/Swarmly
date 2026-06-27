@@ -98,6 +98,7 @@ interface TesterAgentInterface {
 interface WorkspaceManagerInterface {
   applyChanges(projectId: string, files: FileChange[]): Promise<void>;
   readFiles(projectId: string): Promise<Record<string, string>>;
+  deleteFile(projectId: string, filePath: string): Promise<void>;
 }
 
 // ─── Dynamic imports for agents (lazy to avoid circular deps at module load) ──
@@ -468,6 +469,8 @@ export class Pipeline {
       const devOpsAgent = await loadDevOpsAgent();
       const workspaceManager = await loadWorkspaceManager();
       const feedbackHistoryByTask: Map<string, string[]> = new Map();
+      // Repo-improvement projects: sandbox has no internet, skip build to avoid blocking on new deps
+      const skipBuild = !!currentProject.sourceRepo;
 
       // Write initial progress snapshot before development starts
       progressWriter.write(currentProject);
@@ -501,6 +504,7 @@ export class Pipeline {
         );
 
         let taskDone = false;
+        let lastTaskFiles: string[] = [];
         const maxRetries = config.budget.maxRetriesPerTask;
 
         for (let attempt = 0; attempt < maxRetries && !taskDone; attempt++) {
@@ -561,6 +565,7 @@ export class Pipeline {
           }
 
           // Apply changes to workspace and in-memory codebase
+          lastTaskFiles = codeOutput.files.map((f) => f.path);
           try {
             await workspaceManager.applyChanges(projectId, codeOutput.files);
           } catch (err: unknown) {
@@ -568,26 +573,23 @@ export class Pipeline {
           }
           await stateStore.updateCodebase(projectId, codeOutput.files);
 
-          // Run build
-          let buildSuccess = true;
-          let buildError = '';
-          try {
-            const buildResult = await executor.buildProject(projectId);
-            if (!buildResult.success) {
+          // Run build — skipped for repo-improvement mode (sandbox has no internet for new deps)
+          if (!skipBuild) {
+            let buildSuccess = true;
+            try {
+              const buildResult = await executor.buildProject(projectId);
+              if (!buildResult.success) {
+                buildSuccess = false;
+                const buildError = `${buildResult.stderr}\n${buildResult.stdout}`.trim().slice(0, 1000);
+                console.warn(`[Pipeline] Build failed on attempt ${attempt + 1}: ${buildError}`);
+                feedbackHistory.push(`Build failed (attempt ${attempt + 1}): ${buildError}`);
+              }
+            } catch (err: unknown) {
               buildSuccess = false;
-              buildError = `${buildResult.stderr}\n${buildResult.stdout}`.trim().slice(0, 1000);
-              console.warn(`[Pipeline] Build failed on attempt ${attempt + 1}: ${buildError}`);
-              feedbackHistory.push(`Build failed (attempt ${attempt + 1}): ${buildError}`);
-              continue;
+              feedbackHistory.push(`Build threw exception (attempt ${attempt + 1}): ${(err as Error).message}`);
             }
-          } catch (err: unknown) {
-            buildSuccess = false;
-            buildError = (err as Error).message;
-            feedbackHistory.push(`Build threw exception (attempt ${attempt + 1}): ${buildError}`);
-            continue;
+            if (!buildSuccess) continue;
           }
-
-          if (!buildSuccess) continue;
 
           // PM review
           let pmApproved = true;
@@ -677,6 +679,17 @@ export class Pipeline {
         if (!taskDone) {
           task.status = TaskStatus.BLOCKED;
           await stateStore.updateSprint(projectId, sprint);
+
+          // Remove this task's files from workspace to prevent cascading build failures
+          if (lastTaskFiles.length > 0) {
+            for (const filePath of lastTaskFiles) {
+              try {
+                await workspaceManager.deleteFile(projectId, filePath);
+              } catch {
+                // non-critical
+              }
+            }
+          }
 
           try {
             if (task.jiraId) {
