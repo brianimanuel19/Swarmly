@@ -46,17 +46,22 @@ app.get('/api/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-app.post('/api/auth/token', (req: Request, res: Response) => {
-  const { workspaceId, userId } = req.body as {
-    workspaceId?: string;
-    userId?: string;
-  };
+app.post('/api/auth/token', async (req: Request, res: Response) => {
+  const { userId } = req.body as { userId?: string };
 
-  const token = generateToken({
-    workspaceId: workspaceId ?? 'demo-workspace',
-    userId: userId ?? 'demo-user',
-  });
+  // Single-tenant: look up the real workspace UUID from DB instead of using
+  // a hardcoded placeholder that never matches stored projects.
+  let workspaceId = 'demo-workspace';
+  try {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      'SELECT id FROM workspaces ORDER BY created_at ASC LIMIT 1',
+    );
+    if (rows.length > 0) workspaceId = rows[0]!['id'] as string;
+  } catch {
+    // DB not ready yet — fall through to demo-workspace
+  }
 
+  const token = generateToken({ workspaceId, userId: userId ?? 'dashboard-user' });
   res.json({ token, expiresIn: '24h' });
 });
 

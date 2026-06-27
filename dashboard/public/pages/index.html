@@ -777,7 +777,9 @@
 
     <script>
       // ── State ──────────────────────────────────────────────────────────────────
-      let authToken = localStorage.getItem('swarmly_token') || null;
+      // Always fetch a fresh token — cached tokens may encode wrong workspaceId
+      localStorage.removeItem('swarmly_token');
+      let authToken = null;
       let selectedProjectId = null;
       let sseSource = null;
       let refreshTimer = null;
@@ -785,10 +787,11 @@
       // ── Auth ───────────────────────────────────────────────────────────────────
       async function ensureToken() {
         if (authToken) return authToken;
+        // Server now resolves the real workspace UUID — no need to pass workspaceId
         const res = await fetch('/api/auth/token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ workspaceId: 'demo', userId: 'dashboard-user' }),
+          body: JSON.stringify({ userId: 'dashboard-user' }),
         });
         const data = await res.json();
         authToken = data.token;
