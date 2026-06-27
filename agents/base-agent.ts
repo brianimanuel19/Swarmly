@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { AgentRole, AgentOutput, ConversationHistory, TokenUsage } from '../types/index.js';
 import { config } from '../config/config.js';
 import { getProjectContext } from '../orchestrator/project-context.js';
+import { CreditExhaustedError } from '../cost-control/credit-error.js';
 
 export abstract class BaseAgent {
   protected role: AgentRole;
@@ -129,6 +130,12 @@ export abstract class BaseAgent {
 
         if (err instanceof Anthropic.APIError) {
           const status = err.status ?? 0;
+
+          // 402 = insufficient credits — cannot retry, propagate immediately
+          if (status === 402) {
+            throw new CreditExhaustedError('API_402', err.message);
+          }
+
           if (status >= 500) {
             if (attempt < maxRetriesVal) {
               const waitMs = retryDelayMs * Math.pow(2, attempt);

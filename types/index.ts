@@ -29,6 +29,7 @@ export enum TaskStatus {
   IN_REVIEW = 'IN_REVIEW',
   DONE = 'DONE',
   BLOCKED = 'BLOCKED',
+  PAUSED = 'PAUSED',
 }
 
 export enum ProjectPhase {
@@ -85,6 +86,8 @@ export interface Task {
   acceptanceCriteria: string[];
   dependsOn: string[];
   attempts: number;
+  completedCriteria?: string[];
+  filesWritten?: string[];
 }
 
 export interface Sprint {
@@ -118,6 +121,8 @@ export interface ProjectState {
   sourceRepo?: string;
   repoAnalysis?: RepoAnalysis;
   targetBranch?: string;
+  pauseReason?: 'CREDIT_EXHAUSTED' | 'HUMAN_PAUSE';
+  pausedAtTaskId?: string;
 }
 
 export interface AgentMessage {

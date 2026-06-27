@@ -27,11 +27,16 @@ import {
   buildTaskCompleteBlock,
   buildAgentMessage,
   buildRepoAnalysisBlock,
+  buildCreditExhaustedBlock,
 } from '../integrations/slack-messages.js';
 import { SlackListener } from '../integrations/slack-listener.js';
 import { projectStorage, ProjectContext } from './project-context.js';
 import { TaskQueue } from './task-queue.js';
 import { TokenTracker } from '../cost-control/token-tracker.js';
+import { CreditExhaustedError, CreditExhaustedType } from '../cost-control/credit-error.js';
+import { BudgetExceededError } from '../cost-control/budget-guard.js';
+import { ProgressWriter } from './progress-writer.js';
+import Anthropic from '@anthropic-ai/sdk';
 
 // ─── Inline agent interfaces (stubs for missing agent files) ──────────────────
 // These interfaces describe the contracts the Pipeline expects from each agent.
@@ -162,6 +167,9 @@ export class Pipeline {
       >[0],
     );
 
+    // ── 0. Probe API credit before doing any work ────────────────────────────
+    await this._probeApiCredit();
+
     // ── 0. Load project ──────────────────────────────────────────────────────
     let project = await this._requireProject(projectId);
     const channelId = project.slackProjectChannelId;
@@ -219,14 +227,24 @@ export class Pipeline {
       );
 
       // ── 2. PLANNING ────────────────────────────────────────────────────────
+      // isResuming = true when sprint already exists (resume after credit pause)
+      const isResuming = (project.sprint?.tasks?.length ?? 0) > 0;
       await this.handlePhase(projectId, ProjectPhase.PLANNING);
-      await this.postToChannel(slackListener, channelId, 'Loading context and planning sprint…');
+      await this.postToChannel(
+        slackListener,
+        channelId,
+        isResuming
+          ? `Resuming *${project.name}* — sprint already planned, skipping to development…`
+          : 'Loading context and planning sprint…',
+      );
 
       const context = await contextLoader.load(stack);
 
-      // Lazy-load agents
+      // Lazy-load agents (needed for both new and resume flows)
       const pmAgent = await loadPMAgent();
       const poAgent = await loadPOAgent();
+
+      if (!isResuming) {
 
       // Create PRD — for repo improvement mode, include analysis context
       const prdInput = project.repoAnalysis
@@ -430,17 +448,33 @@ export class Pipeline {
           );
         }
       }
+      } // end !isResuming
 
       // ── 3. DEVELOPING ─────────────────────────────────────────────────────
-      await this.handlePhase(projectId, ProjectPhase.DEVELOPING);
+      if (!isResuming) {
+        await this.handlePhase(projectId, ProjectPhase.DEVELOPING);
+      }
+
+      // Reload sprint in case we skipped planning (resume path)
+      const currentProject = await this._requireProject(projectId);
+      const sprint = currentProject.sprint;
+      const jiraSprintId = currentProject.jiraSprintId || undefined;
+      const githubBranch = currentProject.githubBranch || '';
+
+      const progressWriter = new ProgressWriter(
+        `${config.sandbox.workspaceBase}/${projectId}`,
+      );
 
       const devAgent = await loadDevAgent();
       const devOpsAgent = await loadDevOpsAgent();
       const workspaceManager = await loadWorkspaceManager();
       const feedbackHistoryByTask: Map<string, string[]> = new Map();
 
+      // Write initial progress snapshot before development starts
+      progressWriter.write(currentProject);
+
       for (const task of sprint.tasks) {
-        // Skip tasks that are already done
+        // Skip tasks that are already done or still paused (should have been reset to TODO on resume)
         if (task.status === TaskStatus.DONE) continue;
 
         const feedbackHistory: string[] = feedbackHistoryByTask.get(task.id) ?? [];
@@ -501,6 +535,21 @@ export class Pipeline {
               });
             }
           } catch (err: unknown) {
+            // Credit exhausted — pause the project and stop
+            if (err instanceof CreditExhaustedError || err instanceof BudgetExceededError) {
+              await this._handleCreditExhausted({
+                err: err as CreditExhaustedError | BudgetExceededError,
+                task,
+                sprint,
+                project: currentProject,
+                projectId,
+                channelId,
+                slackListener,
+                progressWriter,
+                ctx,
+              });
+              throw err; // propagate to outer catch → marks pipeline as failed (already PAUSED in DB)
+            }
             console.error(
               `[Pipeline] ${isInfraTask ? 'DevOps' : 'Dev'} agent error on attempt ${attempt + 1}: ${(err as Error).message}`,
             );
@@ -576,9 +625,11 @@ export class Pipeline {
               console.warn(`[Pipeline] GitHub commit error: ${(err as Error).message}`);
             }
 
-            // Update task status to DONE
+            // Update task status to DONE, record files written
             task.status = TaskStatus.DONE;
+            task.filesWritten = codeOutput.files.map((f) => f.path);
             await stateStore.updateSprint(projectId, sprint);
+            progressWriter.write({ ...currentProject, sprint });
 
             // Update Jira
             try {
@@ -920,6 +971,87 @@ export class Pipeline {
     } finally {
       ctx.taskQueue.destroy();
     }
+  }
+
+  // ─── _probeApiCredit ──────────────────────────────────────────────────────
+
+  async _probeApiCredit(): Promise<void> {
+    const client = new Anthropic({
+      apiKey: config.anthropic.apiKey,
+      baseURL: config.anthropic.baseUrl,
+    });
+    try {
+      await client.messages.create({
+        model: config.anthropic.models.lobby,
+        max_tokens: 1,
+        messages: [{ role: 'user', content: 'ping' }],
+      });
+    } catch (err) {
+      if (err instanceof Anthropic.APIError && err.status === 402) {
+        throw new CreditExhaustedError('API_402', 'Insufficient Anthropic credits to start pipeline');
+      }
+      // Network errors etc. — don't block the pipeline
+    }
+  }
+
+  // ─── _handleCreditExhausted ───────────────────────────────────────────────
+
+  private async _handleCreditExhausted(params: {
+    err: CreditExhaustedError | BudgetExceededError;
+    task: Task;
+    sprint: import('../types/index.js').Sprint;
+    project: ProjectState;
+    projectId: string;
+    channelId: string;
+    slackListener: SlackListener;
+    progressWriter: ProgressWriter;
+    ctx: ProjectContext;
+  }): Promise<void> {
+    const { err, task, sprint, project, projectId, channelId, slackListener, progressWriter, ctx } = params;
+
+    const creditType: CreditExhaustedType =
+      err instanceof CreditExhaustedError
+        ? err.creditType
+        : (err as BudgetExceededError).reason.includes('daily')
+          ? 'BUDGET_DAILY'
+          : 'BUDGET_SPRINT';
+
+    // Mark current task as PAUSED (not FAILED — will be retried on resume)
+    task.status = TaskStatus.PAUSED;
+    await stateStore.updateSprint(projectId, sprint);
+
+    // Persist pause metadata
+    project.phase = ProjectPhase.PAUSED;
+    project.pauseReason = 'CREDIT_EXHAUSTED';
+    project.pausedAtTaskId = task.id;
+    project.updatedAt = new Date();
+    await stateStore.saveProject(project);
+    await stateStore.updatePhase(projectId, ProjectPhase.PAUSED);
+
+    // Write progress file with current state
+    progressWriter.write(project);
+
+    // Build cost summary for Slack card
+    const report = ctx.tokenTracker.getSprintReport();
+    const costSoFar = `$${report.total.estimatedCostUsd.toFixed(4)}`;
+    const doneTasks = sprint.tasks.filter((t) => t.status === 'DONE').length;
+
+    await this.postBlocksToChannel(
+      slackListener,
+      channelId,
+      `Project paused — credits exhausted`,
+      buildCreditExhaustedBlock({
+        projectId,
+        projectName: project.name,
+        pausedTaskTitle: task.title,
+        doneTasks,
+        totalTasks: sprint.tasks.length,
+        costSoFar,
+        creditType,
+      }),
+    );
+
+    console.log(`[Pipeline] Project ${projectId} paused at task "${task.title}" — credit exhausted (${creditType})`);
   }
 
   // ─── _runRepoAnalysisPhase ─────────────────────────────────────────────────

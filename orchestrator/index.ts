@@ -177,6 +177,12 @@ export class Orchestrator {
       onCheckpointReject: async (event) => {
         await this.handleCheckpointAction(event, false);
       },
+      onResumeProject: async (event) => {
+        const payload = event as unknown as { body?: { actions?: Array<{ value?: string }>; channel?: { id?: string } } };
+        const projectId = payload.body?.actions?.[0]?.value ?? '';
+        const channelId = payload.body?.channel?.id ?? '';
+        await this.handleResumeProject(projectId, channelId);
+      },
     });
 
     // 6. Register mention handler
@@ -256,11 +262,7 @@ export class Orchestrator {
           });
           return;
         }
-        await stateStore.updatePhase(project.id, ProjectPhase.DEVELOPING);
-        await this.webClient.chat.postMessage({
-          channel: channelId,
-          text: `▶ Project *${project.name}* has been resumed.`,
-        });
+        await this.handleResumeProject(project.id, channelId);
       },
 
       onHelp: async (args) => {
@@ -687,6 +689,80 @@ export class Orchestrator {
         this.activeProjectCount = Math.max(0, this.activeProjectCount - 1);
         this.projectTrackers.delete(projectId);
       });
+  }
+
+  // ─── Resume handler ───────────────────────────────────────────────────────
+
+  private async handleResumeProject(projectId: string, channelId: string): Promise<void> {
+    const project = await stateStore.loadProject(projectId);
+    if (!project) {
+      await this.webClient.chat.postMessage({ channel: channelId, text: 'Project not found.' });
+      return;
+    }
+
+    if (project.phase !== ProjectPhase.PAUSED) {
+      await this.webClient.chat.postMessage({
+        channel: channelId,
+        text: `Project *${project.name}* is not paused (current phase: ${project.phase}).`,
+      });
+      return;
+    }
+
+    // Probe API credit before resuming
+    try {
+      const { pipeline } = await import('./pipeline.js');
+      await (pipeline as unknown as { _probeApiCredit: () => Promise<void> })._probeApiCredit();
+    } catch (err) {
+      await this.webClient.chat.postMessage({
+        channel: channelId,
+        text: `:x: Cannot resume — credits still unavailable: ${(err as Error).message}\nPlease top up your Anthropic account and try again.`,
+      });
+      return;
+    }
+
+    // Reset PAUSED task → TODO so it gets retried from scratch
+    const sprint = project.sprint;
+    if (sprint?.tasks) {
+      let changed = false;
+      for (const task of sprint.tasks) {
+        if (task.status === 'PAUSED' as unknown) {
+          task.status = 'TODO' as unknown as import('../types/index.js').TaskStatus;
+          task.filesWritten = [];
+          changed = true;
+        }
+      }
+      if (changed) {
+        await stateStore.updateSprint(projectId, sprint);
+      }
+    }
+
+    // Clear pause metadata and set phase back to DEVELOPING
+    project.phase = ProjectPhase.DEVELOPING;
+    project.updatedAt = new Date();
+    await stateStore.saveProject(project);
+    await stateStore.updatePhase(projectId, ProjectPhase.DEVELOPING);
+
+    await this.webClient.chat.postMessage({
+      channel: channelId,
+      text: `Resuming *${project.name}*... picking up from where it left off.`,
+    });
+
+    const { pipeline } = await import('./pipeline.js');
+    pipeline
+      .run(projectId, this.slackListener)
+      .catch((err) => {
+        console.error(`[Orchestrator] Resume pipeline failed for ${projectId}:`, err);
+        this.webClient.chat
+          .postMessage({ channel: channelId, text: `Resume failed: ${(err as Error).message}` })
+          .catch(console.error);
+      })
+      .finally(() => {
+        this.activeProjectCount = Math.max(0, this.activeProjectCount - 1);
+        this.projectTrackers.delete(projectId);
+      });
+
+    this.activeProjectCount++;
+    this.projectTrackers.set(projectId, new TokenTracker());
   }
 
   // ─── Mention handler ──────────────────────────────────────────────────────

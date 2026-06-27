@@ -9,6 +9,7 @@ const STATUS_TRANSITION_NAMES: Record<TaskStatus, string> = {
   IN_REVIEW: 'In Review',
   DONE: 'Done',
   BLOCKED: 'Blocked',
+  PAUSED: 'Blocked',
 };
 
 // ─── Jira REST response shapes (minimal) ─────────────────────────────────────

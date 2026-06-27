@@ -201,6 +201,7 @@ export class SlackListener {
     onRunCancel: (event: ActionEvent) => Promise<void>;
     onCheckpointApprove: (event: ActionEvent) => Promise<void>;
     onCheckpointReject: (event: ActionEvent) => Promise<void>;
+    onResumeProject: (event: ActionEvent) => Promise<void>;
   }): void {
     this.app.action('run_confirm', async (args: any) => {
       await args.ack();
@@ -225,6 +226,11 @@ export class SlackListener {
     this.app.action('checkpoint_reject', async (args: any) => {
       await args.ack();
       await handlers.onCheckpointReject(args as ActionEvent);
+    });
+
+    this.app.action('resume_project', async (args: any) => {
+      await args.ack();
+      await handlers.onResumeProject(args as ActionEvent);
     });
   }
 

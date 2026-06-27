@@ -555,3 +555,57 @@ export function buildCostReportBlock(report: CostReport): KnownBlock[] {
     context(`Generated at ${report.generatedAt.toUTCString()}`),
   ];
 }
+
+export function buildCreditExhaustedBlock(params: {
+  projectId: string;
+  projectName: string;
+  pausedTaskTitle: string;
+  doneTasks: number;
+  totalTasks: number;
+  costSoFar: string;
+  creditType: 'API_402' | 'BUDGET_DAILY' | 'BUDGET_SPRINT';
+}): KnownBlock[] {
+  const { projectId, projectName, pausedTaskTitle, doneTasks, totalTasks, costSoFar, creditType } =
+    params;
+
+  const reasonText =
+    creditType === 'API_402'
+      ? 'Anthropic API credit exhausted — please top up your account'
+      : creditType === 'BUDGET_DAILY'
+        ? 'Daily budget limit reached — resets at midnight or raise the limit'
+        : 'Sprint token limit reached — reset the sprint budget to continue';
+
+  const resumeHint =
+    creditType === 'BUDGET_DAILY'
+      ? 'Raise the daily limit in config or wait until tomorrow, then resume.'
+      : 'Top up your Anthropic credits, then resume.';
+
+  return [
+    header('Project Paused — Credits Exhausted'),
+    divider(),
+    {
+      type: 'section',
+      fields: [
+        { type: 'mrkdwn', text: `*Project:*\n${projectName}` },
+        { type: 'mrkdwn', text: `*Paused at task:*\n${pausedTaskTitle}` },
+        { type: 'mrkdwn', text: `*Progress:*\n${doneTasks}/${totalTasks} tasks done` },
+        { type: 'mrkdwn', text: `*Cost so far:*\n${costSoFar}` },
+      ],
+    },
+    section(`*Reason:* ${reasonText}`),
+    section(`_${resumeHint}_`),
+    divider(),
+    {
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Resume Project', emoji: false },
+          style: 'primary',
+          action_id: 'resume_project',
+          value: projectId,
+        },
+      ],
+    },
+  ];
+}
