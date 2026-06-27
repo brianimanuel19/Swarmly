@@ -17,10 +17,24 @@ export class StackDetector extends BaseAgent {
   async detect(requirement: string): Promise<DetectedStack> {
     const validDomains = Object.values(StackDomain);
 
+    // Strip GitHub URLs and replace with readable context so the model does not
+    // try to access them. E.g. "https://github.com/owner/my-react-app" → "[repo: my-react-app]"
+    const sanitized = requirement.replace(
+      /https?:\/\/github\.com\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)[^\s]*/g,
+      (_match, _owner, repo) => `[GitHub repo: ${(repo as string).replace(/\.git$/, '')}]`,
+    );
+
     const systemPrompt = [
       'You are a technical stack detector for a software agency.',
-      'Analyse the project requirement below and identify the technology stack.',
-      'Return ONLY a JSON object — no prose, no markdown fences.',
+      'Analyse the project description below and identify the technology stack.',
+      'Return ONLY a valid JSON object — no prose, no markdown fences, no explanation.',
+      '',
+      'IMPORTANT RULES:',
+      '- Do NOT attempt to access any URL, clone any repository, or run any commands.',
+      '- Do NOT say you need more information. Make your best inference from the text.',
+      '- If a GitHub repo name is mentioned (e.g. [GitHub repo: my-react-app]), infer',
+      '  the stack from the name and any surrounding context.',
+      '- Always output valid JSON immediately.',
       '',
       'Schema:',
       '{',
@@ -40,7 +54,7 @@ export class StackDetector extends BaseAgent {
       messages: [
         {
           role: 'user',
-          content: requirement,
+          content: sanitized,
           timestamp: new Date(),
         },
       ],
