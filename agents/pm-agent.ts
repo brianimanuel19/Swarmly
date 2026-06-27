@@ -261,12 +261,6 @@ Write every section fully. No placeholders or TODOs.`;
 
     const prd = output.content.trim();
 
-    // Persist PRD to state store and long-term memory
-    await stateStore.saveProject({
-      id: projectId,
-      prd,
-    } as unknown as import('../types/index.js').ProjectState);
-
     await longTermMemory.remember({
       projectId,
       workspaceId: projectId,
