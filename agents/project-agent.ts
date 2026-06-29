@@ -7,6 +7,8 @@ export interface ProjectAgentResponse {
   type: 'answer' | 'changes';
   text: string;
   files?: FileChange[];
+  sessionExhausted?: boolean;
+  retryAfterSeconds?: number;
 }
 
 export type ConvMessage = { role: 'user' | 'assistant'; content: string };
@@ -24,8 +26,12 @@ export class ProjectAgent extends BaseAgent {
     codebase: Record<string, string>;
     project: ProjectState;
     projectId: string;
+    model?: string;
+    thinking?: boolean;
+    /** OAuth token or per-user API key — overrides system API key */
+    userApiKey?: string;
   }): Promise<ProjectAgentResponse> {
-    const { message, history, codebase, project, projectId } = params;
+    const { message, history, codebase, project, projectId, model, thinking, userApiKey } = params;
 
     const filePaths = Object.keys(codebase).sort();
 
@@ -109,10 +115,18 @@ Only include the JSON block when you are actually writing file changes. Do NOT i
       projectId,
       maxTokens: 6000,
       useCache: true,
+      ...(model !== undefined ? { modelOverride: model } : {}),
+      ...(thinking ? { thinkingBudget: 10000 } : {}),
+      ...(userApiKey !== undefined ? { apiKeyOverride: userApiKey } : {}),
     });
 
     if (!output.success) {
-      return { type: 'answer', text: `Sorry, I ran into an error: ${output.error ?? 'unknown'}` };
+      return {
+        type: 'answer',
+        text: `Sorry, I ran into an error: ${output.error ?? 'unknown'}`,
+        ...(output.sessionExhausted ? { sessionExhausted: true } : {}),
+        ...(output.retryAfterSeconds ? { retryAfterSeconds: output.retryAfterSeconds } : {}),
+      };
     }
 
     const content = output.content.trim();
@@ -121,7 +135,7 @@ Only include the JSON block when you are actually writing file changes. Do NOT i
     const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/);
     if (jsonMatch) {
       try {
-        const parsed = JSON.parse(jsonMatch[1]) as { changes: FileChange[] };
+        const parsed = JSON.parse(jsonMatch[1] ?? '') as { changes: FileChange[] };
         if (Array.isArray(parsed.changes) && parsed.changes.length > 0) {
           const textPart = content.replace(/```json[\s\S]*?```/, '').trim();
           return { type: 'changes', text: textPart, files: parsed.changes };

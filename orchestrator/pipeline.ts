@@ -44,7 +44,7 @@ import Anthropic from '@anthropic-ai/sdk';
 // and agents/tester-agent.ts — which are not yet generated.
 
 interface PMAgentInterface {
-  createPRD(requirement: string, systemPrompt: string, projectId: string): Promise<string>;
+  createPRD(requirement: string, stack: ProjectState['stack'], projectId: string): Promise<string>;
   createSprintPlan(
     prd: string,
     stack: ProjectState['stack'],
@@ -97,7 +97,7 @@ interface TesterAgentInterface {
 
 interface WorkspaceManagerInterface {
   applyChanges(projectId: string, files: FileChange[]): Promise<void>;
-  readFiles(projectId: string): Promise<Record<string, string>>;
+  readCodebase(projectId: string): Promise<Record<string, string>>;
   deleteFile(projectId: string, filePath: string): Promise<void>;
 }
 
@@ -305,7 +305,7 @@ export class Pipeline {
           );
           const revisedPrd = await pmAgent.createPRD(
             `${project.requirement.raw}\n\nFeedback from review: ${prdCheckpoint.feedback}`,
-            context.pmSystemPrompt,
+            stack,
             projectId,
           );
           project.prd = revisedPrd;
@@ -513,7 +513,7 @@ export class Pipeline {
           // Read current codebase from workspace
           let codebase: Record<string, string> = {};
           try {
-            codebase = await workspaceManager.readFiles(projectId);
+            codebase = await workspaceManager.readCodebase(projectId);
           } catch (err: unknown) {
             // Fallback to in-memory codebase
             const currentProject = await stateStore.loadProject(projectId);
@@ -1148,12 +1148,27 @@ export class Pipeline {
       if (!checkpoint.approved) {
         throw new Error(`[Pipeline] Repo analysis rejected. Aborting.`);
       }
+      // Create Jira project if it was skipped on a previous restart
+      if (!project.jiraProjectKey) {
+        try {
+          const jira = await import('../integrations/jira.js');
+          const jiraProjectKey = await jira.jiraIntegration.createProject({
+            name: project.name,
+            description: `Repo improvement sprint for ${fullName}.\n${(project.repoAnalysis.summary ?? '')}`,
+          });
+          project.jiraProjectKey = jiraProjectKey;
+          await this.postToChannel(slackListener, channelId, `Jira project created: \`${jiraProjectKey}\``);
+        } catch (err) {
+          console.warn(`[Pipeline] Jira project creation failed (non-fatal): ${(err as Error).message}`);
+        }
+      }
+
       if (!project.targetBranch) {
         project.targetBranch = `swarmly/improvements-${projectId.slice(0, 6)}`;
         project.githubBranch = project.targetBranch;
-        project.updatedAt = new Date();
-        await stateStore.saveProject(project);
       }
+      project.updatedAt = new Date();
+      await stateStore.saveProject(project);
       return;
     }
 

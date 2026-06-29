@@ -217,17 +217,17 @@ export class StackDetector extends BaseAgent {
     const detected = (analysis.detectedStack ?? []).map((s) => s.toLowerCase());
 
     // Infer primaryDomain from the detected stack strings
-    let primaryDomain: StackDomain = 'backend';
+    let primaryDomain: StackDomain = StackDomain.WEB_SAAS;
     if (detected.some((s) => s.includes('react') || s.includes('vue') || s.includes('angular'))) {
-      primaryDomain = detected.some((s) => s.includes('node') || s.includes('express') || s.includes('nestjs'))
-        ? 'fullstack'
-        : 'frontend';
+      primaryDomain = StackDomain.WEB_SAAS;
     } else if (detected.some((s) => s.includes('solidity') || s.includes('web3'))) {
-      primaryDomain = 'blockchain';
+      primaryDomain = StackDomain.BLOCKCHAIN_EVM;
     } else if (detected.some((s) => s.includes('ml') || s.includes('torch') || s.includes('tensorflow'))) {
-      primaryDomain = 'ml';
-    } else if (detected.some((s) => s.includes('mobile') || s.includes('react native') || s.includes('flutter'))) {
-      primaryDomain = 'mobile';
+      primaryDomain = StackDomain.AI_ML;
+    } else if (detected.some((s) => s.includes('flutter'))) {
+      primaryDomain = StackDomain.MOBILE_FLUTTER;
+    } else if (detected.some((s) => s.includes('mobile') || s.includes('react native'))) {
+      primaryDomain = StackDomain.MOBILE_RN;
     }
 
     const knownLangs = ['TypeScript', 'JavaScript', 'Python', 'Go', 'Rust', 'Java', 'C#', 'Ruby', 'PHP'];

@@ -22,8 +22,12 @@ export abstract class BaseAgent {
     maxTokens?: number;
     useCache?: boolean;
     toolsEnabled?: boolean;
+    modelOverride?: string;
+    thinkingBudget?: number;
+    /** Per-user API key or OAuth token — overrides the system ANTHROPIC_API_KEY */
+    apiKeyOverride?: string;
   }): Promise<AgentOutput> {
-    const { systemPrompt, messages, maxTokens, useCache } = params;
+    const { systemPrompt, messages, maxTokens, useCache, modelOverride, thinkingBudget, apiKeyOverride } = params;
     const maxRetriesVal = config.rateLimit.maxRetries;
     const retryDelayMs = config.rateLimit.retryDelayMs;
 
@@ -58,13 +62,24 @@ export abstract class BaseAgent {
     for (let attempt = 0; attempt <= maxRetriesVal; attempt++) {
       try {
         const ctx = getProjectContext();
+        const effectiveModel = modelOverride ?? this.model;
+        const effectiveMaxTokens = thinkingBudget && thinkingBudget > 0
+          ? Math.max(maxTokens ?? 8192, thinkingBudget + 1000)
+          : (maxTokens ?? 8192);
+        // Use per-user key/token when provided (OAuth or custom API key)
+        const callClient = apiKeyOverride
+          ? new Anthropic({ apiKey: apiKeyOverride, baseURL: config.anthropic.baseUrl })
+          : this.client;
         const doCreate = () =>
-          this.client.messages.create({
-            model: this.model,
-            max_tokens: maxTokens ?? 8192,
+          callClient.messages.create({
+            model: effectiveModel,
+            max_tokens: effectiveMaxTokens,
             system: systemParam,
             messages: anthropicMessages,
-          });
+            ...(thinkingBudget && thinkingBudget > 0
+              ? { thinking: { type: 'enabled', budget_tokens: thinkingBudget } }
+              : {}),
+          } as unknown as Anthropic.MessageCreateParamsNonStreaming);
 
         // Route through per-project rate limiter when available
         const response = ctx
@@ -86,7 +101,7 @@ export abstract class BaseAgent {
 
         // Compute cost
         const pricing =
-          config.anthropic.pricing[this.model] ?? config.anthropic.pricing['claude-sonnet-4-6']!;
+          config.anthropic.pricing[effectiveModel] ?? config.anthropic.pricing['claude-sonnet-4-6']!;
         const costUsd =
           (inTokens / 1_000_000) * pricing.input +
           (outTokens / 1_000_000) * pricing.output +
@@ -101,10 +116,10 @@ export abstract class BaseAgent {
         };
 
         // Record into per-project tracker when inside a pipeline run
-        ctx?.tokenTracker.record(this.role, this.model, inTokens, outTokens, cacheHits);
+        ctx?.tokenTracker.record(this.role, effectiveModel, inTokens, outTokens, cacheHits);
 
         console.log(
-          `[AGENT] ${this.role} | ${inTokens}in ${outTokens}out | $${costUsd.toFixed(6)}`,
+          `[AGENT] ${this.role} (${effectiveModel}) | ${inTokens}in ${outTokens}out | $${costUsd.toFixed(6)}`,
         );
 
         return {
@@ -117,6 +132,33 @@ export abstract class BaseAgent {
         lastError = err instanceof Error ? err : new Error(String(err));
 
         if (err instanceof Anthropic.RateLimitError) {
+          // Detect 5h session exhaustion: Retry-After > 5 minutes, or message mentions usage/quota
+          const retryAfter = parseInt(
+            (err as unknown as { headers?: Record<string, string> }).headers?.['retry-after'] ?? '0',
+            10,
+          );
+          const msg = err.message?.toLowerCase() ?? '';
+          const isSessionExhausted =
+            retryAfter > 300 ||
+            msg.includes('usage limit') ||
+            msg.includes('session limit') ||
+            msg.includes('daily limit') ||
+            msg.includes('quota') ||
+            msg.includes('exceeded');
+
+          if (isSessionExhausted) {
+            console.warn(`[AGENT] ${this.role} session usage exhausted (apiKeyOverride=${!!apiKeyOverride}). Retry-After=${retryAfter}s`);
+            return {
+              success: false,
+              content: '',
+              tokenUsage: { inputTokens, outputTokens: 0, cacheHits: 0, totalTokens: inputTokens, estimatedCostUsd: 0 },
+              error: `Session usage exhausted${retryAfter > 0 ? ` — resets in ${Math.ceil(retryAfter / 60)} min` : ''}`,
+              retryCount: attempt,
+              sessionExhausted: true,
+              ...(retryAfter > 0 ? { retryAfterSeconds: retryAfter } : {}),
+            };
+          }
+
           if (attempt < maxRetriesVal) {
             const waitMs = retryDelayMs * Math.pow(2, attempt);
             console.warn(

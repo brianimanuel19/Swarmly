@@ -24,6 +24,7 @@ import type { Pool, RowDataPacket } from 'mysql2/promise';
 // ─── Lazy imports for agents (created on first use) ──────────────────────────
 // pm-agent and pipeline are imported inline to allow circular-ref safety and
 // to avoid instantiation at module load when env vars may not be set yet.
+import { projectCommands } from './project-commands.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -166,7 +167,7 @@ export class Orchestrator {
     }
 
     // 4c. Register project channel handler — full codebase-aware agent (like Claude for VSCode)
-    this.slackListener.setupProjectChannelHandler(async ({ channelId, threadTs, userMessage, userId }) => {
+    this.slackListener.setupProjectChannelHandler(async ({ channelId, threadTs, userMessage, userId, uploadedFiles }) => {
       try {
         const project = await stateStore.getProjectByChannelId(channelId);
         if (!project) return; // not a project channel
@@ -176,11 +177,124 @@ export class Orchestrator {
         // "reset" clears conversation history for this thread
         if (userMessage.trim().toLowerCase() === 'reset') {
           this.projectChannelHistory.delete(threadKey);
+          await stateStore.deletePendingProject(`conv_${threadKey}`).catch(() => {});
           await this.webClient.chat.postMessage({
             channel: channelId, thread_ts: threadTs,
             text: '🔄 Conversation cleared. Start fresh!',
           });
           return;
+        }
+
+        // ── Pipeline control commands (status, re-run phases) ─────────────
+        const lower = userMessage.toLowerCase();
+
+        if (/\bstatus\b|trạng thái|progress|tiến độ/.test(lower)) {
+          const tasks = project.sprint?.tasks ?? [];
+          const taskLines = tasks.length > 0
+            ? tasks.map((t) => {
+                const icon = t.status === 'DONE' ? '✅' : t.status === 'BLOCKED' ? '🚫' : t.status === 'IN_PROGRESS' ? '⏳' : '⬜';
+                return `${icon} ${t.title}`;
+              }).join('\n')
+            : '_No tasks yet_';
+          await this.webClient.chat.postMessage({
+            channel: channelId, thread_ts: threadTs,
+            text: `*Project:* ${project.name}\n*Phase:* ${project.phase}\n*Sprint:* ${project.sprint?.goal ?? 'N/A'}\n\n*Tasks:*\n${taskLines}`,
+          });
+          return;
+        }
+
+        const isRerunDev = /re.?run|restart|chạy lại|retry all|redo all/.test(lower) &&
+          /cod(e|ing)|dev(elop)?|task|sprint|phase/.test(lower);
+        if (isRerunDev) {
+          if (project.sprint?.tasks) {
+            const { TaskStatus } = await import('../types/index.js');
+            const resetDone = /redo|re-do|làm lại/.test(lower);
+            for (const t of project.sprint.tasks) {
+              if (t.status === TaskStatus.BLOCKED || (resetDone && t.status === TaskStatus.DONE)) {
+                t.status = TaskStatus.TODO; t.attempts = 0; t.filesWritten = [];
+              }
+            }
+            await stateStore.updateSprint(project.id, project.sprint);
+          }
+          await stateStore.updatePhase(project.id, ProjectPhase.DEVELOPING);
+          await this.webClient.chat.postMessage({ channel: channelId, thread_ts: threadTs, text: '🔄 Resetting blocked tasks and resuming coding phase…' });
+          await this.handleResumeProject(project.id, channelId);
+          return;
+        }
+
+        const isRerunTest = /re.?run|restart|chạy lại/.test(lower) && /test(ing)?|kiểm thử|qa/.test(lower);
+        if (isRerunTest) {
+          await stateStore.updatePhase(project.id, ProjectPhase.DEVELOPING);
+          await this.webClient.chat.postMessage({ channel: channelId, thread_ts: threadTs, text: '🧪 Resuming from testing phase…' });
+          await this.handleResumeProject(project.id, channelId);
+          return;
+        }
+
+        const isRerunPlan = /re.?run|restart|chạy lại/.test(lower) && /plan(ning)?|prd|sprint.?plan|lập kế hoạch|backlog/.test(lower);
+        if (isRerunPlan) {
+          await stateStore.updateSprint(project.id, null as unknown as import('../types/index.js').Sprint);
+          await stateStore.updatePhase(project.id, ProjectPhase.DETECTING);
+          await this.webClient.chat.postMessage({ channel: channelId, thread_ts: threadTs, text: '📋 Resetting sprint plan and resuming from planning phase…' });
+          await this.handleResumeProject(project.id, channelId);
+          return;
+        }
+
+        // ── Command routing (slash commands, shortcuts) — handled FIRST ──
+        const cmdResult = await projectCommands.handle({
+          text: userMessage,
+          project,
+          channelId,
+          threadTs,
+          webClient: this.webClient,
+          userId,
+        });
+
+        // Handle /compact specially — needs access to history
+        if ((cmdResult as unknown as { compactRequested?: boolean }).compactRequested) {
+          const history = this.projectChannelHistory.get(threadKey) ?? [];
+          const msg = await this.webClient.chat.postMessage({ channel: channelId, thread_ts: threadTs, text: '⏳ Compacting context…' });
+          const compacted = await projectCommands.compactHistory(history);
+          this.projectChannelHistory.set(threadKey, compacted);
+          await stateStore.savePendingProject(`conv_${threadKey}`, compacted).catch(() => {});
+          await this.webClient.chat.update({ channel: channelId, ts: msg.ts as string, text: `✅ Context compacted: ${history.length} messages → ${compacted.length}. Summary:\n${compacted[0]?.content?.slice(0, 300) ?? ''}` });
+          return;
+        }
+
+        if (cmdResult.handled) return;
+
+        // ── Load/resume conversation history (persisted across restarts) ──
+        let history = this.projectChannelHistory.get(threadKey);
+        if (!history) {
+          // Try to resume from DB
+          const saved = await stateStore.loadPendingProject(`conv_${threadKey}`).catch(() => null);
+          history = (Array.isArray(saved) ? saved : []) as Array<{ role: 'user' | 'assistant'; content: string }>;
+          // Also inherit from branch source if this is a branch
+          if (history.length === 0) {
+            const sourceKey = projectCommands.getBranchSource(threadKey);
+            if (sourceKey) history = [...(this.projectChannelHistory.get(sourceKey) ?? [])];
+          }
+          this.projectChannelHistory.set(threadKey, history);
+        }
+
+        // ── Download uploaded files and append to user message ──
+        let enrichedMessage = userMessage;
+        if (uploadedFiles && uploadedFiles.length > 0) {
+          const fileContents: string[] = [];
+          for (const file of uploadedFiles) {
+            try {
+              if (file.size > 500_000) { fileContents.push(`[File too large: ${file.name}]`); continue; }
+              const resp = await fetch(file.urlPrivate, { headers: { Authorization: `Bearer ${config.slack.botToken}` } });
+              if (!resp.ok) { fileContents.push(`[Could not download: ${file.name}]`); continue; }
+              const text = await resp.text();
+              const snippet = text.length > 8000 ? text.slice(0, 8000) + '\n…[truncated]' : text;
+              fileContents.push(`### Uploaded file: ${file.name}\n\`\`\`\n${snippet}\n\`\`\``);
+            } catch { fileContents.push(`[Error reading: ${file.name}]`); }
+          }
+          if (fileContents.length > 0) {
+            enrichedMessage = [userMessage, ...fileContents].filter(Boolean).join('\n\n');
+          }
+          // Acknowledge file receipt
+          await this.webClient.chat.postMessage({ channel: channelId, thread_ts: threadTs, text: `📎 Received ${uploadedFiles.map((f) => `\`${f.name}\``).join(', ')}` });
         }
 
         // Post "thinking" indicator immediately
@@ -193,28 +307,95 @@ export class Orchestrator {
         let codebase: Record<string, string> = project.codebase ?? {};
         try {
           const { workspaceManager } = await import('../sandbox/workspace-manager.js');
-          const wsCb = await workspaceManager.readFiles(project.id);
+          const wsCb = await workspaceManager.readCodebase(project.id);
           if (Object.keys(wsCb).length > 0) codebase = wsCb;
         } catch { /* sandbox may not exist — use DB codebase */ }
 
-        const history = this.projectChannelHistory.get(threadKey) ?? [];
+        // ── Per-channel settings (model, thinking, mode) ──
+        const chanSettings = projectCommands.getSettings(channelId);
+
+        // Look up per-user auth key (OAuth token or custom API key)
+        const { userAuthStore } = await import('../auth/user-auth-store.js');
+        const userApiKey = await userAuthStore.getEffectiveKey(userId).catch(() => null);
 
         const { projectAgent } = await import('../agents/project-agent.js');
         const response = await projectAgent.handleMessage({
-          message: userMessage,
+          message: enrichedMessage,
           history,
           codebase,
           project,
           projectId: project.id,
+          ...(chanSettings.model ? { model: chanSettings.model } : {}),
+          ...(chanSettings.thinking ? { thinking: chanSettings.thinking } : {}),
+          ...(userApiKey ? { userApiKey } : {}),
         });
 
-        // Update history (keep last 10 turns to avoid context overflow)
-        history.push({ role: 'user', content: userMessage });
-        history.push({ role: 'assistant', content: response.text });
-        this.projectChannelHistory.set(threadKey, history.slice(-20));
+        // ── Session usage exhausted (OAuth / personal key 5h limit) ──────────
+        if (response.sessionExhausted) {
+          const waitMin = response.retryAfterSeconds ? Math.ceil(response.retryAfterSeconds / 60) : null;
+          const waitText = waitMin ? ` Session resets in ~${waitMin} min.` : '';
+          await this.webClient.chat.update({
+            channel: channelId,
+            ts: thinkingMsg.ts as string,
+            text: `⏳ *Your Claude session usage is exhausted.*${waitText}\n\nYou can:\n• Wait for the 5-hour window to reset\n• Run \`/switch account\` to use a different auth method\n• Or run \`/login\` to re-authenticate`,
+            blocks: [
+              { type: 'section', text: { type: 'mrkdwn', text: `⏳ *Your Claude session usage is exhausted.*${waitText}\n\nYour personal Claude account has reached its usage limit for this 5-hour window.` } },
+              {
+                type: 'actions',
+                elements: [
+                  { type: 'button' as const, text: { type: 'plain_text' as const, text: '↺ Switch Account' }, action_id: 'switch_to_oauth', value: `${userId}::${channelId}::${threadTs}`, style: 'primary' as const },
+                ],
+              },
+              { type: 'context', elements: [{ type: 'mrkdwn', text: `_Or type \`/login\` to re-authenticate, or \`/logout\` to revert to the workspace default key._` }] },
+            ],
+          });
+          return;
+        }
 
-        // If agent made code changes — apply them
+        // Record token usage for /usage dashboard (local 5h + 7-day tracking)
+        {
+          const { userSessionTracker } = await import('../auth/user-session-tracker.js');
+          const approxTokens = Math.ceil((enrichedMessage.length + response.text.length) / 4);
+          const { userAuthStore: uas } = await import('../auth/user-auth-store.js');
+          const authStatus = await uas.getStatus(userId).catch(() => ({ type: 'none' as const }));
+          userSessionTracker.record(userId, approxTokens);
+          if (authStatus.type !== 'none') {
+            // Plan will be filled in when user runs /account
+          }
+        }
+
+        // Update history (keep last 20 turns) and persist to DB for resume across restarts
+        history.push({ role: 'user', content: enrichedMessage });
+        history.push({ role: 'assistant', content: response.text });
+        const trimmedHistory = history.slice(-20);
+        this.projectChannelHistory.set(threadKey, trimmedHistory);
+        stateStore.savePendingProject(`conv_${threadKey}`, trimmedHistory).catch(() => {});
+
+        // If agent made code changes — handle plan mode or apply directly
         if (response.type === 'changes' && response.files && response.files.length > 0) {
+          // Save checkpoint BEFORE applying changes
+          const currentCodebase = project.codebase ?? {};
+          projectCommands.saveCheckpoint(
+            project.id,
+            `Before: ${userMessage.slice(0, 30)}`,
+            currentCodebase,
+          );
+
+          if (chanSettings.mode === 'plan') {
+            // Plan mode: show proposal with Approve/Cancel buttons, don't apply yet
+            await projectCommands.storePendingPlan({
+              project,
+              channelId,
+              threadTs,
+              thinkingTs: thinkingMsg.ts as string,
+              description: response.text,
+              files: response.files,
+              webClient: this.webClient,
+            });
+            return;
+          }
+
+          // Auto or default mode: apply changes immediately
           try {
             const { workspaceManager } = await import('../sandbox/workspace-manager.js');
             await workspaceManager.applyChanges(project.id, response.files);
@@ -245,6 +426,11 @@ export class Orchestrator {
       } catch (err) {
         console.warn(`[Orchestrator] projectChannelHandler error: ${(err as Error).message}`);
       }
+    });
+
+    // 4d. Register DM handler for auth commands (auth, auth status, auth logout, apikey)
+    this.slackListener.setupDMHandler(async ({ userId, channelId, text }) => {
+      await this.handleAuthDM(userId, channelId, text);
     });
 
     // 5. Register action handlers (run_confirm / run_cancel / checkpoint)
@@ -323,6 +509,103 @@ export class Orchestrator {
       },
       onTaskRedo: async (event) => {
         await this.handleTaskRedo(event);
+      },
+      onPlanApprove: async (event) => {
+        const planId = (event.payload?.value ?? event.body?.actions?.[0]?.value ?? '') as string;
+        const plan = projectCommands.getPendingPlan(planId);
+        if (!plan) {
+          await this.webClient.chat.postMessage({
+            channel: (event.body?.channel?.id ?? '') as string,
+            text: '❌ Plan expired or already applied.',
+          });
+          return;
+        }
+        projectCommands.deletePendingPlan(planId);
+        try {
+          const { workspaceManager } = await import('../sandbox/workspace-manager.js');
+          await workspaceManager.applyChanges(plan.projectId, plan.files);
+          await stateStore.updateCodebase(plan.projectId, plan.files);
+          const fileList = plan.files.map((f) => `• \`${f.path}\``).join('\n');
+          await this.webClient.chat.update({
+            channel: plan.channelId,
+            ts: plan.thinkingTs,
+            text: `✅ *Changes applied!*\n\n${fileList}`,
+          });
+        } catch (err) {
+          await this.webClient.chat.postMessage({
+            channel: plan.channelId,
+            text: `❌ Apply failed: ${(err as Error).message}`,
+          });
+        }
+      },
+      onPlanCancel: async (event) => {
+        const channelId = (event.body?.channel?.id ?? '') as string;
+        const messageTs = (event.body?.message?.ts ?? '') as string;
+        const planId = (event.payload?.value ?? event.body?.actions?.[0]?.value ?? '') as string;
+        projectCommands.deletePendingPlan(planId);
+        await this.webClient.chat.update({
+          channel: channelId,
+          ts: messageTs,
+          text: '❌ Changes cancelled.',
+        });
+      },
+      onSwitchToOAuth: async (event) => {
+        // Value: "userId::channelId::threadTs"
+        const raw = (event.payload?.value ?? event.body?.actions?.[0]?.value ?? '') as string;
+        const [userId, channelId, threadTs] = raw.split('::');
+        if (!userId || !channelId) return;
+        const { projectCommands: pc } = await import('./project-commands.js');
+        const project = await stateStore.getProjectByChannelId(channelId);
+        if (!project) return;
+        await pc.handle({ text: '/login', project, channelId, threadTs: threadTs ?? channelId, webClient: this.webClient, userId });
+      },
+      onSwitchLogout: async (event) => {
+        const raw = (event.payload?.value ?? event.body?.actions?.[0]?.value ?? '') as string;
+        const [userId, channelId, threadTs] = raw.split('::');
+        if (!userId || !channelId) return;
+        const { userAuthStore } = await import('../auth/user-auth-store.js');
+        await userAuthStore.deleteAuth(userId);
+        await this.webClient.chat.postMessage({
+          channel: channelId,
+          ...(threadTs ? { thread_ts: threadTs } : {}),
+          text: `✅ Signed out <@${userId}>. Workspace default key will be used.`,
+        });
+      },
+      onCheckpointRestore: async (event) => {
+        const channelId = (event.body?.channel?.id ?? '') as string;
+        const raw = (event.payload?.value ?? event.body?.actions?.[0]?.value ?? '{}') as string;
+        let projectId = '';
+        let checkpointId = '';
+        try {
+          ({ projectId, checkpointId } = JSON.parse(raw) as { projectId: string; checkpointId: string });
+        } catch {
+          await this.webClient.chat.postMessage({ channel: channelId, text: '❌ Invalid checkpoint data.' });
+          return;
+        }
+        const checkpoint = projectCommands.getCheckpointById(projectId, checkpointId);
+        if (!checkpoint) {
+          await this.webClient.chat.postMessage({ channel: channelId, text: '❌ Checkpoint not found.' });
+          return;
+        }
+        try {
+          const files = Object.entries(checkpoint.files).map(([path, content]) => ({
+            action: 'modify' as const,
+            path,
+            content,
+          }));
+          const { workspaceManager } = await import('../sandbox/workspace-manager.js');
+          await workspaceManager.applyChanges(projectId, files);
+          await stateStore.updateCodebase(projectId, files);
+          await this.webClient.chat.postMessage({
+            channel: channelId,
+            text: `✅ Restored checkpoint *${checkpoint.label}* — ${files.length} files restored.`,
+          });
+        } catch (err) {
+          await this.webClient.chat.postMessage({
+            channel: channelId,
+            text: `❌ Restore failed: ${(err as Error).message}`,
+          });
+        }
       },
     });
 
@@ -417,8 +700,138 @@ export class Orchestrator {
             '• `/swarmly-resume` — Resume a paused project',
             '• `/swarmly-help` — Show this help message',
             '',
+            '*Account (like Claude Code):*',
+            '• `/login` — Sign in with Claude OAuth or API key',
+            '• `/switch-account` — View current account and switch auth method',
+            '• `/logout` — Sign out and remove stored credentials',
+            '',
+            'In any project channel, type `/help` for per-channel AI commands.',
             'To start a new project, describe it in the lobby channel.',
           ].join('\n'),
+        });
+      },
+
+      onAccount: async (args) => {
+        const channelId = args.command.channel_id as string;
+        const userId = args.command.user_id as string;
+        const project = await this.findProjectByChannel(channelId);
+        if (project) {
+          // Delegate to project-commands which has the full /account render
+          await projectCommands.handle({ text: '/account', project, channelId, threadTs: channelId, webClient: this.webClient, userId });
+        } else {
+          // No project channel — render directly
+          const { userAuthStore } = await import('../auth/user-auth-store.js');
+          const { userSessionTracker, formatDuration, progressBar } = await import('../auth/user-session-tracker.js');
+          const status = await userAuthStore.getStatus(userId);
+          const stats = userSessionTracker.getStats(userId);
+          let profile: { email?: string; organizationName?: string; plan?: string } = {};
+          if (status.type === 'oauth') {
+            const token = await userAuthStore.getEffectiveKey(userId).catch(() => null);
+            if (token) {
+              const { fetchUserInfo } = await import('../auth/claude-oauth.js');
+              profile = await fetchUserInfo(token).catch(() => ({}));
+            }
+          }
+          const authMethod = status.type === 'oauth' ? 'Claude AI (OAuth)' : status.type === 'api_key' ? 'API Key' : 'Workspace default';
+          await this.webClient.chat.postMessage({
+            channel: channelId,
+            text: [
+              `*Auth method:* ${authMethod}`,
+              profile.email ? `*Email:* ${profile.email}` : '',
+              profile.organizationName ? `*Org:* ${profile.organizationName}` : '',
+              profile.plan ? `*Plan:* ${profile.plan}` : '',
+              '',
+              `*Session (5hr):*  ${stats.sessionPercent}% · \`${progressBar(stats.sessionPercent, 20)}\` · Resets in ${formatDuration(stats.sessionResetsInMs)}`,
+              `*Weekly (7 day):* ${stats.weeklyPercent}% · \`${progressBar(stats.weeklyPercent, 20)}\` · Resets in ${formatDuration(stats.weeklyResetsInMs)}`,
+              '',
+              '<https://claude.ai/settings/usage|Manage usage on claude.ai>',
+            ].filter(Boolean).join('\n'),
+          });
+        }
+      },
+
+      onLogin: async (args) => {
+        const channelId = args.command.channel_id as string;
+        const userId = args.command.user_id as string;
+        const { isOAuthConfigured, generatePKCE, generateState, buildAuthUrl } = await import('../auth/claude-oauth.js');
+        const { userAuthStore } = await import('../auth/user-auth-store.js');
+        const status = await userAuthStore.getStatus(userId);
+        const statusLine = status.type === 'oauth' ? '🟢 Signed in via *OAuth*.' : status.type === 'api_key' ? '🔑 Using *personal API key*.' : '⚪ Not signed in (workspace default key).';
+
+        if (!isOAuthConfigured()) {
+          await this.webClient.chat.postMessage({
+            channel: channelId,
+            text: `${statusLine}\n\nOAuth is not configured. DM the bot with \`apikey sk-ant-...\` to use a personal API key.`,
+          });
+          return;
+        }
+
+        const { verifier, challenge } = generatePKCE();
+        const state = generateState();
+        await stateStore.savePendingProject(`oauth_state_${state}`, { slackUserId: userId, codeVerifier: verifier, channelId, expiresAt: Date.now() + 600_000 });
+        const authUrl = buildAuthUrl(state, challenge);
+        await this.webClient.chat.postMessage({
+          channel: channelId,
+          text: `${statusLine}\n\n🔐 *Sign in with Claude*\n<${authUrl}|→ Click here to authenticate>\n\n_Link expires in 10 minutes._`,
+          blocks: [
+            { type: 'section', text: { type: 'mrkdwn', text: `${statusLine}\n\n🔐 *Sign in with Claude*\nConnect your Claude account so Swarmly uses your personal subscription.` } },
+            { type: 'actions', elements: [{ type: 'button' as const, text: { type: 'plain_text' as const, text: '→ Sign in with Claude' }, url: authUrl, style: 'primary' as const, action_id: 'oauth_login_link' }] },
+            { type: 'context', elements: [{ type: 'mrkdwn', text: '_Or DM the bot: `apikey sk-ant-...` to use a personal API key. Link expires in 10 minutes._' }] },
+          ],
+        });
+      },
+
+      onSwitchAccount: async (args) => {
+        const channelId = args.command.channel_id as string;
+        const userId = args.command.user_id as string;
+        const { userAuthStore } = await import('../auth/user-auth-store.js');
+        const { isOAuthConfigured, generatePKCE, generateState, buildAuthUrl } = await import('../auth/claude-oauth.js');
+        const status = await userAuthStore.getStatus(userId);
+        const currentAuth = status.type === 'oauth' ? `🟢 *OAuth* (expires: ${status.expiry?.toLocaleString() ?? 'unknown'})` : status.type === 'api_key' ? '🔑 *Personal API key*' : '⚪ *None* (workspace default)';
+
+        const blocks: object[] = [
+          { type: 'section', text: { type: 'mrkdwn', text: `*Account — <@${userId}>*\n\nCurrent: ${currentAuth}` } },
+          { type: 'divider' },
+        ];
+
+        if (isOAuthConfigured()) {
+          const { verifier, challenge } = generatePKCE();
+          const state = generateState();
+          await stateStore.savePendingProject(`oauth_state_${state}`, { slackUserId: userId, codeVerifier: verifier, channelId, expiresAt: Date.now() + 600_000 });
+          const authUrl = buildAuthUrl(state, challenge);
+          blocks.push({
+            type: 'section',
+            text: { type: 'mrkdwn', text: '🔐 *Sign in with Claude OAuth*\nUse your personal Claude subscription.' },
+            accessory: { type: 'button', text: { type: 'plain_text', text: status.type === 'oauth' ? '↺ Re-authenticate' : '→ Sign in with OAuth' }, url: authUrl, ...(status.type !== 'oauth' ? { style: 'primary' } : {}), action_id: 'oauth_login_link' },
+          });
+        }
+
+        blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '🔑 *Use personal API key*\nDM the bot: `apikey sk-ant-...`' } });
+
+        if (status.type !== 'none') {
+          blocks.push({
+            type: 'section',
+            text: { type: 'mrkdwn', text: '🚪 *Sign out*\nRemove credentials, revert to workspace default.' },
+            accessory: { type: 'button', text: { type: 'plain_text', text: 'Sign out' }, action_id: 'switch_logout', value: `${userId}::${channelId}::`, style: 'danger' },
+          });
+        }
+
+        await this.webClient.chat.postMessage({
+          channel: channelId,
+          text: `Current auth: ${currentAuth}`,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          blocks: blocks as any,
+        });
+      },
+
+      onLogout: async (args) => {
+        const channelId = args.command.channel_id as string;
+        const userId = args.command.user_id as string;
+        const { userAuthStore } = await import('../auth/user-auth-store.js');
+        await userAuthStore.deleteAuth(userId);
+        await this.webClient.chat.postMessage({
+          channel: channelId,
+          text: `✅ Signed out <@${userId}>. Your credentials have been removed. Workspace default key will be used.`,
         });
       },
     });
@@ -445,6 +858,93 @@ export class Orchestrator {
     // 11. Ready log
     console.log(
       `🤖 Swarmly is listening in #${config.slack.lobbyChannelId}... Dashboard at http://localhost:${config.dashboard.port}`,
+    );
+  }
+
+  // ─── Auth DM handler ──────────────────────────────────────────────────────
+
+  private async handleAuthDM(userId: string, channelId: string, text: string): Promise<void> {
+    const { userAuthStore } = await import('../auth/user-auth-store.js');
+    const { isOAuthConfigured, generatePKCE, generateState, buildAuthUrl } = await import('../auth/claude-oauth.js');
+    const lower = text.toLowerCase().trim();
+
+    const reply = async (msg: string) => {
+      await this.webClient.chat.postMessage({ channel: channelId, text: msg });
+    };
+
+    // auth status
+    if (lower === 'auth status' || lower === 'auth info') {
+      const status = await userAuthStore.getStatus(userId);
+      if (status.type === 'none') {
+        await reply('You are not authenticated. Send `auth` to connect via OAuth, or `apikey <your-key>` to use an API key.');
+      } else if (status.type === 'oauth') {
+        const expiry = status.expiry ? ` (expires ${status.expiry.toLocaleString()})` : '';
+        await reply(`✅ Authenticated via *OAuth*${expiry}. Your Claude subscription is active.`);
+      } else {
+        await reply('✅ Authenticated via *API key*. Your personal key is used for all AI calls.');
+      }
+      return;
+    }
+
+    // auth logout / disconnect
+    if (lower === 'auth logout' || lower === 'auth disconnect' || lower === 'logout') {
+      await userAuthStore.deleteAuth(userId);
+      await reply('✅ Disconnected. Your auth credentials have been removed.');
+      return;
+    }
+
+    // apikey <key>
+    if (lower.startsWith('apikey ') || lower.startsWith('api key ') || lower.startsWith('api_key ')) {
+      const parts = text.trim().split(/\s+/);
+      const key = parts[1] ?? '';
+      if (!key.startsWith('sk-ant-')) {
+        await reply('❌ Invalid API key format. Anthropic keys start with `sk-ant-`.');
+        return;
+      }
+      await userAuthStore.saveApiKey(userId, key);
+      await reply('✅ API key saved! Your personal key will be used for all AI calls in Swarmly project channels.');
+      return;
+    }
+
+    // auth (start OAuth flow)
+    if (lower === 'auth' || lower === 'login' || lower === 'authenticate') {
+      if (!isOAuthConfigured()) {
+        await reply(
+          '⚠️ OAuth is not configured on this Swarmly instance.\n' +
+          'You can still use a personal API key: send `apikey sk-ant-...`',
+        );
+        return;
+      }
+
+      const { verifier, challenge } = generatePKCE();
+      const state = generateState();
+
+      // Store verifier + channelId in DB keyed by state (TTL via app logic — expires after 10 min)
+      await stateStore.savePendingProject(`oauth_state_${state}`, {
+        slackUserId: userId,
+        codeVerifier: verifier,
+        channelId,
+        expiresAt: Date.now() + 10 * 60 * 1000,
+      });
+
+      const authUrl = buildAuthUrl(state, challenge);
+      await reply(
+        `🔐 *Authenticate with Claude*\n\n` +
+        `Click the link below to connect your Claude account. ` +
+        `This grants Swarmly access to run AI calls using your subscription.\n\n` +
+        `<${authUrl}|→ Connect Claude Account>\n\n` +
+        `_Link expires in 10 minutes. Send \`auth\` again to get a new link._`,
+      );
+      return;
+    }
+
+    // help / fallback
+    await reply(
+      '*Auth commands:*\n' +
+      '• `auth` — Connect via Claude OAuth (recommended)\n' +
+      '• `apikey sk-ant-...` — Save a personal API key\n' +
+      '• `auth status` — Check current auth\n' +
+      '• `auth logout` — Remove stored credentials',
     );
   }
 

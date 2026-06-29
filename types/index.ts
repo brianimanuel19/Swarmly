@@ -142,6 +142,10 @@ export interface AgentOutput {
   tokenUsage: TokenUsage;
   error?: string;
   retryCount?: number;
+  /** True when the per-user OAuth/API-key session usage limit is exhausted (5h window). */
+  sessionExhausted?: boolean;
+  /** Estimated seconds until the session resets (from Retry-After header). */
+  retryAfterSeconds?: number;
 }
 
 export interface FileChange {

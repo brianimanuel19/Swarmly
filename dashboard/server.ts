@@ -48,6 +48,89 @@ app.get('/', (_req: Request, res: Response) => {
   res.sendFile(join(__dirname, 'public', 'pages', 'index.html'));
 });
 
+// ─── OAuth callback ───────────────────────────────────────────────────────────
+// Receives the redirect from claude.ai after user authorizes the OAuth app.
+// Set CLAUDE_OAUTH_REDIRECT_URI=https://your-host/oauth/callback in .env
+
+app.get('/oauth/callback', async (req: Request, res: Response) => {
+  const { code, state, error } = req.query as Record<string, string>;
+
+  if (error) {
+    res.status(400).send(`
+      <html><body style="font-family:sans-serif;text-align:center;padding:60px">
+        <h2>❌ Authentication failed</h2><p>${error}</p>
+        <p>Return to Slack and try again.</p>
+      </body></html>
+    `);
+    return;
+  }
+
+  if (!code || !state) {
+    res.status(400).send('Missing code or state parameter.');
+    return;
+  }
+
+  // Load pending OAuth state
+  const pending = await stateStore.loadPendingProject(`oauth_state_${state}`);
+  if (!pending || typeof pending !== 'object') {
+    res.status(400).send(`
+      <html><body style="font-family:sans-serif;text-align:center;padding:60px">
+        <h2>❌ Invalid or expired auth link</h2>
+        <p>Please start the auth flow again in Slack by typing <code>auth</code> in a DM to the bot.</p>
+      </body></html>
+    `);
+    return;
+  }
+
+  const { slackUserId, codeVerifier, channelId } = pending as { slackUserId: string; codeVerifier: string; channelId?: string };
+
+  try {
+    const { exchangeCode } = await import('../auth/claude-oauth.js');
+    const tokens = await exchangeCode(code, codeVerifier);
+
+    const { userAuthStore } = await import('../auth/user-auth-store.js');
+    await userAuthStore.saveOAuthTokens(slackUserId, tokens.accessToken, tokens.refreshToken, tokens.expiresIn);
+
+    // Clean up pending state
+    await stateStore.deletePendingProject(`oauth_state_${state}`);
+
+    // Notify user in Slack DM
+    try {
+      const { WebClient } = await import('@slack/web-api');
+      const web = new WebClient(config.slack.botToken);
+      const dmTarget = channelId ?? slackUserId;
+      await web.chat.postMessage({
+        channel: dmTarget,
+        text: [
+          '✅ *Authentication successful!*',
+          '',
+          'You are now authenticated with Claude via OAuth.',
+          'Your personal Claude subscription will be used for all AI interactions in Swarmly project channels.',
+          '',
+          'Type `auth status` to verify, or `auth logout` to disconnect.',
+        ].join('\n'),
+      });
+    } catch { /* DM may fail if user hasn't opened DM — that's OK */ }
+
+    res.send(`
+      <html><body style="font-family:sans-serif;text-align:center;padding:60px">
+        <h2>✅ Authentication successful!</h2>
+        <p>You can now close this window and return to Slack.</p>
+        <p>Your Claude subscription is now linked to Swarmly.</p>
+      </body></html>
+    `);
+  } catch (err) {
+    console.error('[OAuth callback] Token exchange failed:', err);
+    res.status(500).send(`
+      <html><body style="font-family:sans-serif;text-align:center;padding:60px">
+        <h2>❌ Token exchange failed</h2>
+        <p>${(err as Error).message}</p>
+        <p>Please try again in Slack.</p>
+      </body></html>
+    `);
+  }
+});
+
 // ─── Public routes ────────────────────────────────────────────────────────────
 
 app.get('/api/health', (_req: Request, res: Response) => {

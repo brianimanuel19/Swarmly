@@ -153,29 +153,62 @@ export class SlackListener {
       threadTs: string;
       userMessage: string;
       userId: string;
+      uploadedFiles?: Array<{ name: string; mimetype: string; urlPrivate: string; size: number }>;
     }) => Promise<void>,
   ): void {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     this.app.message(async ({ message }: { message: any }) => {
-      if (
-        message.subtype !== undefined ||
-        !('text' in message) ||
-        !message.text ||
-        !message.channel ||
-        !message.ts ||
-        !message.user
-      ) return;
+      // Allow normal messages AND file_share subtypes
+      const isFileShare = message.subtype === 'file_share';
+      const hasFiles = Array.isArray(message.files) && message.files.length > 0;
 
-      if (message.channel === this.lobbyChannelId) return; // lobby handled separately
+      if (!isFileShare && message.subtype !== undefined) return;
+      if (!message.channel || !message.ts || !message.user) return;
+      // Must have text OR files — not completely empty
+      if (!message.text && !hasFiles) return;
+
+      if (message.channel === this.lobbyChannelId) return;
       if (message.user === this.botUserId) return;
 
       const threadTs: string = message.thread_ts ?? message.ts;
 
+      // Collect uploaded file metadata (content will be downloaded by orchestrator)
+      const uploadedFiles = hasFiles
+        ? (message.files as any[]).map((f: any) => ({
+            name: f.name as string,
+            mimetype: (f.mimetype ?? 'text/plain') as string,
+            urlPrivate: (f.url_private ?? f.url_private_download ?? '') as string,
+            size: (f.size ?? 0) as number,
+          }))
+        : undefined;
+
       await onMessage({
         channelId: message.channel as string,
         threadTs,
-        userMessage: message.text as string,
+        userMessage: (message.text as string | undefined) ?? '',
         userId: message.user as string,
+        ...(uploadedFiles !== undefined ? { uploadedFiles } : {}),
+      });
+    });
+  }
+
+  // ─── DM handler — handles direct messages for auth commands ─────────────────
+
+  setupDMHandler(
+    onDM: (params: { userId: string; channelId: string; text: string }) => Promise<void>,
+  ): void {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.app.message(async ({ message }: { message: any }) => {
+      // Only handle DMs (channel_type === 'im') not already handled by project/lobby handlers
+      if (message.channel_type !== 'im') return;
+      if (message.subtype !== undefined) return;
+      if (!message.user || !message.text || !message.channel) return;
+      if (message.user === this.botUserId) return;
+
+      await onDM({
+        userId: message.user as string,
+        channelId: message.channel as string,
+        text: (message.text as string).trim(),
       });
     });
   }
@@ -240,6 +273,11 @@ export class SlackListener {
     onClarificationAnswer: (event: ActionEvent) => Promise<void>;
     onTaskRetry: (event: ActionEvent) => Promise<void>;
     onTaskRedo: (event: ActionEvent) => Promise<void>;
+    onPlanApprove: (event: ActionEvent) => Promise<void>;
+    onPlanCancel: (event: ActionEvent) => Promise<void>;
+    onCheckpointRestore: (event: ActionEvent) => Promise<void>;
+    onSwitchToOAuth: (event: ActionEvent) => Promise<void>;
+    onSwitchLogout: (event: ActionEvent) => Promise<void>;
   }): void {
     this.app.action('run_confirm', async (args: any) => {
       await args.ack();
@@ -288,6 +326,46 @@ export class SlackListener {
       await args.ack();
       await handlers.onTaskRedo(args as ActionEvent);
     });
+
+    // Wildcard handler for plan approval buttons (plan_approve_<planId>)
+    this.app.action(/^plan_approve_/, async (args: any) => {
+      await args.ack();
+      await handlers.onPlanApprove(args as ActionEvent);
+    });
+
+    // Wildcard handler for plan cancel buttons (plan_cancel_<planId>)
+    this.app.action(/^plan_cancel_/, async (args: any) => {
+      await args.ack();
+      await handlers.onPlanCancel(args as ActionEvent);
+    });
+
+    // Wildcard handler for checkpoint restore buttons (checkpoint_restore_<checkpointId>)
+    this.app.action(/^checkpoint_restore_/, async (args: any) => {
+      await args.ack();
+      await handlers.onCheckpointRestore(args as ActionEvent);
+    });
+
+    // /switch account — OAuth button
+    this.app.action('switch_to_oauth', async (args: any) => {
+      await args.ack();
+      await handlers.onSwitchToOAuth(args as ActionEvent);
+    });
+
+    // /switch account — logout button
+    this.app.action('switch_logout', async (args: any) => {
+      await args.ack();
+      await handlers.onSwitchLogout(args as ActionEvent);
+    });
+
+    // /login OAuth link button (link_button — just ack, no action needed)
+    this.app.action('oauth_login_link', async (args: any) => {
+      await args.ack();
+    });
+
+    // /account usage external link button (just ack)
+    this.app.action('open_usage_link', async (args: any) => {
+      await args.ack();
+    });
   }
 
   // ─── Slash command handlers ───────────────────────────────────────────────
@@ -298,6 +376,10 @@ export class SlackListener {
     onPause: SlashHandler;
     onResume: SlashHandler;
     onHelp: SlashHandler;
+    onLogin: SlashHandler;
+    onSwitchAccount: SlashHandler;
+    onLogout: SlashHandler;
+    onAccount: SlashHandler;
   }): void {
     this.app.command('/swarmly-status', async (args: any) => {
       await args.ack();
@@ -323,6 +405,38 @@ export class SlackListener {
       await args.ack();
       await handlers.onHelp(args);
     });
+
+    // ── Account & Usage ──
+    for (const cmd of ['/account', '/swarmly-account', '/usage', '/swarmly-usage']) {
+      this.app.command(cmd, async (args: any) => {
+        await args.ack();
+        await handlers.onAccount(args);
+      });
+    }
+
+    // ── Auth commands — mimic Claude Code for VSCode /login & /switch account ──
+
+    // Handles both /login (if registered in Slack) and /swarmly-login
+    for (const cmd of ['/login', '/swarmly-login']) {
+      this.app.command(cmd, async (args: any) => {
+        await args.ack();
+        await handlers.onLogin(args);
+      });
+    }
+
+    for (const cmd of ['/switch-account', '/swarmly-switch']) {
+      this.app.command(cmd, async (args: any) => {
+        await args.ack();
+        await handlers.onSwitchAccount(args);
+      });
+    }
+
+    for (const cmd of ['/logout', '/swarmly-logout']) {
+      this.app.command(cmd, async (args: any) => {
+        await args.ack();
+        await handlers.onLogout(args);
+      });
+    }
   }
 
   // ─── Messaging helpers ────────────────────────────────────────────────────
