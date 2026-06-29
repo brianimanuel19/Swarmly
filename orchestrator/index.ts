@@ -557,7 +557,7 @@ export class Orchestrator {
         const { projectCommands: pc } = await import('./project-commands.js');
         const project = await stateStore.getProjectByChannelId(channelId);
         if (!project) return;
-        await pc.handle({ text: '/swarmly-login', project, channelId, threadTs: threadTs ?? channelId, webClient: this.webClient, userId });
+        await pc.handle({ text: '/swarmly-login', project, channelId, threadTs: threadTs ?? '', webClient: this.webClient, userId });
       },
       onSwitchLogout: async (event) => {
         const raw = (event.payload?.value ?? event.body?.actions?.[0]?.value ?? '') as string;
@@ -718,7 +718,7 @@ export class Orchestrator {
         const project = await this.findProjectByChannel(channelId);
         if (project) {
           // Delegate to project-commands which has the full /account render
-          await projectCommands.handle({ text: '/swarmly-account', project, channelId, threadTs: channelId, webClient: this.webClient, userId });
+          await projectCommands.handle({ text: '/swarmly-account', project, channelId, threadTs: '', webClient: this.webClient, userId });
         } else {
           // No project channel — render directly
           const { userAuthStore } = await import('../auth/user-auth-store.js');

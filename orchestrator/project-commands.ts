@@ -118,6 +118,11 @@ export class ProjectCommands {
     );
   }
 
+  // Omit thread_ts when empty (slash commands have no thread context)
+  private th(threadTs: string): { thread_ts: string } | Record<string, never> {
+    return threadTs ? { thread_ts: threadTs } : {};
+  }
+
   // ── Main command router ────────────────────────────────────────────────────
 
   async handle(params: {
@@ -494,7 +499,7 @@ export class ProjectCommands {
 
   private async _runAccountUsage(channelId: string, threadTs: string, webClient: WebClient, userId?: string): Promise<void> {
     if (!userId) {
-      await webClient.chat.postMessage({ channel: channelId, thread_ts: threadTs, text: '❌ Cannot identify user.' });
+      await webClient.chat.postMessage({ channel: channelId, ...this.th(threadTs), text: '❌ Cannot identify user.' });
       return;
     }
 
@@ -597,7 +602,7 @@ export class ProjectCommands {
     ];
 
     await webClient.chat.postMessage({
-      channel: channelId, thread_ts: threadTs,
+      channel: channelId, ...this.th(threadTs),
       text: lines.join('\n'),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       blocks: blocks as any,
@@ -608,7 +613,7 @@ export class ProjectCommands {
 
   private async _runLogin(channelId: string, threadTs: string, webClient: WebClient, userId?: string): Promise<void> {
     if (!userId) {
-      await webClient.chat.postMessage({ channel: channelId, thread_ts: threadTs, text: '❌ Cannot identify user. Please try again.' });
+      await webClient.chat.postMessage({ channel: channelId, ...this.th(threadTs), text: '❌ Cannot identify user. Please try again.' });
       return;
     }
 
@@ -625,7 +630,7 @@ export class ProjectCommands {
 
     if (!isOAuthConfigured()) {
       await webClient.chat.postMessage({
-        channel: channelId, thread_ts: threadTs,
+        channel: channelId, ...this.th(threadTs),
         text: [
           statusLine,
           '',
@@ -654,7 +659,7 @@ export class ProjectCommands {
 
     const authUrl = buildAuthUrl(state, challenge);
     await webClient.chat.postMessage({
-      channel: channelId, thread_ts: threadTs,
+      channel: channelId, ...this.th(threadTs),
       text: `${statusLine}\n\n🔐 *Sign in with Claude*\n<${authUrl}|→ Click here to authenticate with Claude>\n\n_Link expires in 10 minutes. Run \`/swarmly-login\` again to get a fresh link._`,
       blocks: [
         { type: 'section', text: { type: 'mrkdwn', text: `${statusLine}\n\n🔐 *Sign in with Claude*\nClick below to connect your Claude account. This allows Swarmly to run AI calls using your personal Claude subscription.` } },
@@ -677,7 +682,7 @@ export class ProjectCommands {
 
   private async _runSwitchAccount(channelId: string, threadTs: string, webClient: WebClient, userId?: string): Promise<void> {
     if (!userId) {
-      await webClient.chat.postMessage({ channel: channelId, thread_ts: threadTs, text: '❌ Cannot identify user. Please try again.' });
+      await webClient.chat.postMessage({ channel: channelId, ...this.th(threadTs), text: '❌ Cannot identify user. Please try again.' });
       return;
     }
 
@@ -729,7 +734,7 @@ export class ProjectCommands {
     }
 
     await webClient.chat.postMessage({
-      channel: channelId, thread_ts: threadTs,
+      channel: channelId, ...this.th(threadTs),
       text: `Current auth: ${currentAuth}`,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       blocks: blocks as any,
@@ -738,12 +743,12 @@ export class ProjectCommands {
 
   private async _runLogout(channelId: string, threadTs: string, webClient: WebClient, userId?: string): Promise<void> {
     if (!userId) {
-      await webClient.chat.postMessage({ channel: channelId, thread_ts: threadTs, text: '❌ Cannot identify user.' });
+      await webClient.chat.postMessage({ channel: channelId, ...this.th(threadTs), text: '❌ Cannot identify user.' });
       return;
     }
     const { userAuthStore } = await import('../auth/user-auth-store.js');
     await userAuthStore.deleteAuth(userId);
-    await webClient.chat.postMessage({ channel: channelId, thread_ts: threadTs, text: '✅ Signed out. Your credentials have been removed. The workspace default key will be used.' });
+    await webClient.chat.postMessage({ channel: channelId, ...this.th(threadTs), text: '✅ Signed out. Your credentials have been removed. The workspace default key will be used.' });
   }
 
   private async _postHelp(channelId: string, threadTs: string, webClient: WebClient): Promise<void> {
