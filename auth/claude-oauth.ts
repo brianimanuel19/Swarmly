@@ -1,18 +1,22 @@
 import crypto from 'crypto';
+import { getOAuthClientId, isOAuthReady } from './claude-client-id.js';
 
-// ── OAuth configuration (set via env vars) ────────────────────────────────────
-// Register your app at https://console.anthropic.com to get a client_id.
+// ── OAuth configuration ───────────────────────────────────────────────────────
+// client_id is auto-detected from the installed `claude` CLI on the server,
+// or can be overridden via CLAUDE_OAUTH_CLIENT_ID env var.
 // CLAUDE_OAUTH_REDIRECT_URI must point to your publicly accessible server,
 // e.g. https://swarmly.example.com/oauth/callback
-export const OAUTH_CLIENT_ID = process.env.CLAUDE_OAUTH_CLIENT_ID ?? '';
+
 export const OAUTH_REDIRECT_URI = process.env.CLAUDE_OAUTH_REDIRECT_URI ?? '';
 export const OAUTH_AUTH_URL = process.env.CLAUDE_OAUTH_AUTH_URL ?? 'https://claude.ai/oauth/authorize';
 export const OAUTH_TOKEN_URL = process.env.CLAUDE_OAUTH_TOKEN_URL ?? 'https://claude.ai/oauth/token';
-
 export const OAUTH_SCOPES = 'org:create_api_key user:profile user:inference';
 
+// Re-export for convenience
+export { getOAuthClientId, isOAuthReady };
+
 export function isOAuthConfigured(): boolean {
-  return !!OAUTH_CLIENT_ID && !!OAUTH_REDIRECT_URI;
+  return isOAuthReady();
 }
 
 // ── PKCE ─────────────────────────────────────────────────────────────────────
@@ -32,7 +36,7 @@ export function generateState(): string {
 export function buildAuthUrl(state: string, challenge: string): string {
   const url = new URL(OAUTH_AUTH_URL);
   url.searchParams.set('response_type', 'code');
-  url.searchParams.set('client_id', OAUTH_CLIENT_ID);
+  url.searchParams.set('client_id', getOAuthClientId());
   url.searchParams.set('redirect_uri', OAUTH_REDIRECT_URI);
   url.searchParams.set('scope', OAUTH_SCOPES);
   url.searchParams.set('state', state);
@@ -55,7 +59,7 @@ export async function exchangeCode(code: string, verifier: string): Promise<OAut
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       grant_type: 'authorization_code',
-      client_id: OAUTH_CLIENT_ID,
+      client_id: getOAuthClientId(),
       redirect_uri: OAUTH_REDIRECT_URI,
       code,
       code_verifier: verifier,
@@ -122,7 +126,7 @@ export async function refreshOAuthToken(refreshToken: string): Promise<OAuthToke
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       grant_type: 'refresh_token',
-      client_id: OAUTH_CLIENT_ID,
+      client_id: getOAuthClientId(),
       refresh_token: refreshToken,
     }),
   });

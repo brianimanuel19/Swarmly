@@ -232,26 +232,25 @@ export class ProjectCommands {
       return { handled: true };
     }
 
-    // /account or /usage — show Account & Usage panel (like Claude Code for VSCode)
-    if (cmd === 'account' || cmd === 'usage' || lower === 'account & usage') {
+    // ── /swarmly-* auth commands — routed here when triggered from index.ts ──
+    // (Bolt routes them directly to handlers via slash command registration;
+    //  index.ts also calls projectCommands.handle() to post into the project channel)
+    if (cmd === 'swarmly-account' || cmd === 'swarmly-usage') {
       await this._runAccountUsage(channelId, threadTs, webClient, userId);
       return { handled: true };
     }
 
-    // /login — start OAuth or show API key option (like Claude Code /login)
-    if (cmd === 'login' || cmd === 'auth') {
+    if (cmd === 'swarmly-login') {
       await this._runLogin(channelId, threadTs, webClient, userId);
       return { handled: true };
     }
 
-    // /switch account — show current auth + options to switch (like Claude Code /switch account)
-    if (cmd === 'switch' || (cmd === 'switch' && lower.includes('account'))) {
+    if (cmd === 'swarmly-switch') {
       await this._runSwitchAccount(channelId, threadTs, webClient, userId);
       return { handled: true };
     }
 
-    // /logout — remove auth credentials
-    if (cmd === 'logout' || cmd === 'signout' || cmd === 'sign-out') {
+    if (cmd === 'swarmly-logout') {
       await this._runLogout(channelId, threadTs, webClient, userId);
       return { handled: true };
     }
@@ -630,10 +629,14 @@ export class ProjectCommands {
         text: [
           statusLine,
           '',
-          '🔐 *Sign in with a personal Claude API key:*',
-          'Send a DM to this bot with: `apikey sk-ant-...`',
+          '🔑 *Option 1 — Subscription token (dùng plan Claude Pro/Max/Team của bạn):*',
+          '```',
+          'claude setup-token   # chạy lệnh này trên máy của bạn',
+          '```',
+          'Copy token `sk-ant-oat01-...` → DM bot: `apikey sk-ant-oat01-...`',
           '',
-          '_OAuth is not configured on this instance. Contact your admin to enable it._',
+          '🔐 *Option 2 — API key (bill by token):*',
+          'Lấy key tại <https://console.anthropic.com|console.anthropic.com> → DM bot: `apikey sk-ant-api03-...`',
         ].join('\n'),
       });
       return;
@@ -652,7 +655,7 @@ export class ProjectCommands {
     const authUrl = buildAuthUrl(state, challenge);
     await webClient.chat.postMessage({
       channel: channelId, thread_ts: threadTs,
-      text: `${statusLine}\n\n🔐 *Sign in with Claude*\n<${authUrl}|→ Click here to authenticate with Claude>\n\n_Link expires in 10 minutes. Run \`/login\` again to get a fresh link._`,
+      text: `${statusLine}\n\n🔐 *Sign in with Claude*\n<${authUrl}|→ Click here to authenticate with Claude>\n\n_Link expires in 10 minutes. Run \`/swarmly-login\` again to get a fresh link._`,
       blocks: [
         { type: 'section', text: { type: 'mrkdwn', text: `${statusLine}\n\n🔐 *Sign in with Claude*\nClick below to connect your Claude account. This allows Swarmly to run AI calls using your personal Claude subscription.` } },
         {
@@ -786,11 +789,11 @@ export class ProjectCommands {
         '`re-run planning` — Re-generate PRD and sprint plan',
         '`reset` — Clear conversation history for this thread',
         '',
-        '*Account (like Claude Code):*',
-        '`/account` — Account & Usage panel (session 5hr %, weekly %, plan info)',
-        '`/login` — Sign in with Claude OAuth or API key',
-        '`/switch account` — View current account and switch auth method',
-        '`/logout` — Sign out and remove stored credentials',
+        '*Account:*',
+        '`/swarmly-account` — Account & Usage panel (session 5hr %, weekly %, plan info)',
+        '`/swarmly-login` — Sign in with Claude OAuth or API key',
+        '`/swarmly-switch` — View current account and switch auth method',
+        '`/swarmly-logout` — Sign out and remove stored credentials',
       ].join('\n'),
     });
   }

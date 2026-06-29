@@ -337,7 +337,7 @@ export class Orchestrator {
           await this.webClient.chat.update({
             channel: channelId,
             ts: thinkingMsg.ts as string,
-            text: `⏳ *Your Claude session usage is exhausted.*${waitText}\n\nYou can:\n• Wait for the 5-hour window to reset\n• Run \`/switch account\` to use a different auth method\n• Or run \`/login\` to re-authenticate`,
+            text: `⏳ *Your Claude session usage is exhausted.*${waitText}\n\nYou can:\n• Wait for the 5-hour window to reset\n• Run \`/swarmly-switch\` to use a different auth method\n• Or run \`/swarmly-login\` to re-authenticate`,
             blocks: [
               { type: 'section', text: { type: 'mrkdwn', text: `⏳ *Your Claude session usage is exhausted.*${waitText}\n\nYour personal Claude account has reached its usage limit for this 5-hour window.` } },
               {
@@ -346,7 +346,7 @@ export class Orchestrator {
                   { type: 'button' as const, text: { type: 'plain_text' as const, text: '↺ Switch Account' }, action_id: 'switch_to_oauth', value: `${userId}::${channelId}::${threadTs}`, style: 'primary' as const },
                 ],
               },
-              { type: 'context', elements: [{ type: 'mrkdwn', text: `_Or type \`/login\` to re-authenticate, or \`/logout\` to revert to the workspace default key._` }] },
+              { type: 'context', elements: [{ type: 'mrkdwn', text: `_Or use \`/swarmly-login\` to re-authenticate, or \`/swarmly-logout\` to revert to the workspace default key._` }] },
             ],
           });
           return;
@@ -557,7 +557,7 @@ export class Orchestrator {
         const { projectCommands: pc } = await import('./project-commands.js');
         const project = await stateStore.getProjectByChannelId(channelId);
         if (!project) return;
-        await pc.handle({ text: '/login', project, channelId, threadTs: threadTs ?? channelId, webClient: this.webClient, userId });
+        await pc.handle({ text: '/swarmly-login', project, channelId, threadTs: threadTs ?? channelId, webClient: this.webClient, userId });
       },
       onSwitchLogout: async (event) => {
         const raw = (event.payload?.value ?? event.body?.actions?.[0]?.value ?? '') as string;
@@ -700,12 +700,13 @@ export class Orchestrator {
             '• `/swarmly-resume` — Resume a paused project',
             '• `/swarmly-help` — Show this help message',
             '',
-            '*Account (like Claude Code):*',
-            '• `/login` — Sign in with Claude OAuth or API key',
-            '• `/switch-account` — View current account and switch auth method',
-            '• `/logout` — Sign out and remove stored credentials',
+            '*Account & Auth:*',
+            '• `/swarmly-login` — Sign in with Claude OAuth or API key',
+            '• `/swarmly-switch` — View current account and switch auth method',
+            '• `/swarmly-logout` — Sign out and remove stored credentials',
+            '• `/swarmly-account` — Account & Usage panel (5hr session, weekly %, plan info)',
             '',
-            'In any project channel, type `/help` for per-channel AI commands.',
+            'In any project channel, type `/swarmly-help` for per-channel AI commands.',
             'To start a new project, describe it in the lobby channel.',
           ].join('\n'),
         });
@@ -717,7 +718,7 @@ export class Orchestrator {
         const project = await this.findProjectByChannel(channelId);
         if (project) {
           // Delegate to project-commands which has the full /account render
-          await projectCommands.handle({ text: '/account', project, channelId, threadTs: channelId, webClient: this.webClient, userId });
+          await projectCommands.handle({ text: '/swarmly-account', project, channelId, threadTs: channelId, webClient: this.webClient, userId });
         } else {
           // No project channel — render directly
           const { userAuthStore } = await import('../auth/user-auth-store.js');
@@ -893,16 +894,25 @@ export class Orchestrator {
       return;
     }
 
-    // apikey <key>
+    // apikey <key>  — accepts both sk-ant-api03-* (API key) and sk-ant-oat01-* (Subscription OAuth token)
     if (lower.startsWith('apikey ') || lower.startsWith('api key ') || lower.startsWith('api_key ')) {
       const parts = text.trim().split(/\s+/);
       const key = parts[1] ?? '';
       if (!key.startsWith('sk-ant-')) {
-        await reply('❌ Invalid API key format. Anthropic keys start with `sk-ant-`.');
+        await reply(
+          '❌ Invalid format. Accepted:\n' +
+          '• `sk-ant-oat01-...` — Subscription token (từ `claude setup-token`, dùng plan Pro/Max/Team)\n' +
+          '• `sk-ant-api03-...` — API key (từ console.anthropic.com, bill by token)',
+        );
         return;
       }
       await userAuthStore.saveApiKey(userId, key);
-      await reply('✅ API key saved! Your personal key will be used for all AI calls in Swarmly project channels.');
+      const isSubscription = key.startsWith('sk-ant-oat');
+      await reply(
+        isSubscription
+          ? '✅ *Subscription token saved!* AI calls trong Swarmly sẽ dùng plan Claude Pro/Max/Team của bạn.'
+          : '✅ *API key saved!* Your personal key will be used for all AI calls in Swarmly project channels.',
+      );
       return;
     }
 
@@ -941,10 +951,14 @@ export class Orchestrator {
     // help / fallback
     await reply(
       '*Auth commands:*\n' +
-      '• `auth` — Connect via Claude OAuth (recommended)\n' +
-      '• `apikey sk-ant-...` — Save a personal API key\n' +
+      '• `apikey sk-ant-oat01-...` — Subscription token (chạy `claude setup-token` để lấy) ⭐\n' +
+      '• `apikey sk-ant-api03-...` — API key từ console.anthropic.com\n' +
       '• `auth status` — Check current auth\n' +
-      '• `auth logout` — Remove stored credentials',
+      '• `auth logout` — Remove stored credentials\n' +
+      '\n' +
+      '*Cách lấy Subscription token:*\n' +
+      '```\nnpm install -g @anthropic-ai/claude-code\nclaude setup-token\n```\n' +
+      'Copy token `sk-ant-oat01-...` rồi gửi: `apikey sk-ant-oat01-...`',
     );
   }
 

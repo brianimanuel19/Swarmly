@@ -1,4 +1,5 @@
 allowBuilds:
+  '@anthropic-ai/claude-code': true
   cpu-features: true
   esbuild: true
   protobufjs: true

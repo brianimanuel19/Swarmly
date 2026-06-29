@@ -406,37 +406,29 @@ export class SlackListener {
       await handlers.onHelp(args);
     });
 
-    // ── Account & Usage ──
-    for (const cmd of ['/account', '/swarmly-account', '/usage', '/swarmly-usage']) {
+    // ── Account & Usage — /swarmly-account / /swarmly-usage ──
+    for (const cmd of ['/swarmly-account', '/swarmly-usage']) {
       this.app.command(cmd, async (args: any) => {
         await args.ack();
         await handlers.onAccount(args);
       });
     }
 
-    // ── Auth commands — mimic Claude Code for VSCode /login & /switch account ──
+    // ── Auth commands — all prefixed /swarmly-* to avoid text chat conflicts ──
+    this.app.command('/swarmly-login', async (args: any) => {
+      await args.ack();
+      await handlers.onLogin(args);
+    });
 
-    // Handles both /login (if registered in Slack) and /swarmly-login
-    for (const cmd of ['/login', '/swarmly-login']) {
-      this.app.command(cmd, async (args: any) => {
-        await args.ack();
-        await handlers.onLogin(args);
-      });
-    }
+    this.app.command('/swarmly-switch', async (args: any) => {
+      await args.ack();
+      await handlers.onSwitchAccount(args);
+    });
 
-    for (const cmd of ['/switch-account', '/swarmly-switch']) {
-      this.app.command(cmd, async (args: any) => {
-        await args.ack();
-        await handlers.onSwitchAccount(args);
-      });
-    }
-
-    for (const cmd of ['/logout', '/swarmly-logout']) {
-      this.app.command(cmd, async (args: any) => {
-        await args.ack();
-        await handlers.onLogout(args);
-      });
-    }
+    this.app.command('/swarmly-logout', async (args: any) => {
+      await args.ack();
+      await handlers.onLogout(args);
+    });
   }
 
   // ─── Messaging helpers ────────────────────────────────────────────────────

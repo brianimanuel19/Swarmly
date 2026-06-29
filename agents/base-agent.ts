@@ -66,9 +66,13 @@ export abstract class BaseAgent {
         const effectiveMaxTokens = thinkingBudget && thinkingBudget > 0
           ? Math.max(maxTokens ?? 8192, thinkingBudget + 1000)
           : (maxTokens ?? 8192);
-        // Use per-user key/token when provided (OAuth or custom API key)
+        // Use per-user key/token when provided.
+        // sk-ant-oat01-* = Subscription OAuth token → must use Authorization: Bearer (authToken)
+        // sk-ant-api03-* = standard API key → use X-Api-Key (apiKey)
         const callClient = apiKeyOverride
-          ? new Anthropic({ apiKey: apiKeyOverride, baseURL: config.anthropic.baseUrl })
+          ? apiKeyOverride.startsWith('sk-ant-oat')
+            ? new Anthropic({ authToken: apiKeyOverride, baseURL: config.anthropic.baseUrl })
+            : new Anthropic({ apiKey: apiKeyOverride, baseURL: config.anthropic.baseUrl })
           : this.client;
         const doCreate = () =>
           callClient.messages.create({
