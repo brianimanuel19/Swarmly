@@ -650,12 +650,20 @@ export class ProjectCommands {
     // Generate PKCE and store pending OAuth state
     const { verifier, challenge } = generatePKCE();
     const state = generateState();
-    await stateStore.savePendingProject(`oauth_state_${state}`, {
-      slackUserId: userId,
-      codeVerifier: verifier,
-      channelId,
-      expiresAt: Date.now() + 10 * 60 * 1000,
-    });
+    const oauthExpiry = Date.now() + 10 * 60 * 1000;
+    await Promise.all([
+      stateStore.savePendingProject(`oauth_state_${state}`, {
+        slackUserId: userId,
+        codeVerifier: verifier,
+        channelId,
+        expiresAt: oauthExpiry,
+      }),
+      // Keyed by userId so tryHandleOAuthCode can find it when user pastes the code
+      stateStore.savePendingProject(`oauth_user_${userId}`, {
+        codeVerifier: verifier,
+        expiresAt: oauthExpiry,
+      }),
+    ]);
 
     const authUrl = buildAuthUrl(state, challenge);
     await webClient.chat.postMessage({
