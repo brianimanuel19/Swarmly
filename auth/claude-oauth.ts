@@ -55,16 +55,17 @@ export interface OAuthTokens {
 }
 
 export async function exchangeCode(code: string, verifier: string): Promise<OAuthTokens> {
+  const params = new URLSearchParams({
+    grant_type: 'authorization_code',
+    client_id: getOAuthClientId(),
+    redirect_uri: OAUTH_REDIRECT_URI,
+    code,
+    code_verifier: verifier,
+  });
   const res = await fetch(OAUTH_TOKEN_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      grant_type: 'authorization_code',
-      client_id: getOAuthClientId(),
-      redirect_uri: OAUTH_REDIRECT_URI,
-      code,
-      code_verifier: verifier,
-    }),
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString(),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -122,14 +123,15 @@ export async function fetchUserInfo(accessToken: string): Promise<OAuthUserInfo>
 }
 
 export async function refreshOAuthToken(refreshToken: string): Promise<OAuthTokens> {
+  const params = new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id: getOAuthClientId(),
+    refresh_token: refreshToken,
+  });
   const res = await fetch(OAUTH_TOKEN_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      grant_type: 'refresh_token',
-      client_id: getOAuthClientId(),
-      refresh_token: refreshToken,
-    }),
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString(),
   });
   if (!res.ok) {
     throw new Error(`Token refresh failed (${res.status}): ${await res.text()}`);

@@ -125,7 +125,7 @@ export class Orchestrator {
     // 4b. Register chat channel handler (optional — only if SLACK_CHAT_CHANNEL is set)
     if (config.slack.chatChannelId) {
       const chatChannelId = config.slack.chatChannelId;
-      this.slackListener.setupChatHandler(chatChannelId, async ({ userMessage, userId, channelId }) => {
+      this.slackListener.setupChatHandler(chatChannelId, async ({ userMessage, userId, channelId, threadTs }) => {
         try {
           const { chatReply, clearThread, detectRole } = await import('../agents/chat-agent.js');
 
@@ -136,6 +136,7 @@ export class Orchestrator {
             clearThread(threadKey);
             await this.webClient.chat.postMessage({
               channel: channelId,
+              thread_ts: threadTs,
               text: 'Cleared! Start fresh anytime.',
             });
             return;
@@ -156,6 +157,7 @@ export class Orchestrator {
 
           await this.webClient.chat.postMessage({
             channel: channelId,
+            thread_ts: threadTs,
             text: reply, // plain-text fallback for notifications
             blocks: agentRole ? buildAgentMessage(reply, agentRole) : undefined,
           });
@@ -186,7 +188,18 @@ export class Orchestrator {
         }
 
         // Auto-detect auth code paste (user pastes code from platform.claude.com after /swarmly-login)
-        if (await this.tryHandleOAuthCode(userId, channelId, threadTs, userMessage)) return;
+        const oauthResult = await this.tryHandleOAuthCode(userId, channelId, threadTs, userMessage);
+        if (oauthResult) {
+          // Persist auth event into conversation history so subsequent PM agent messages have context
+          const hist = this.projectChannelHistory.get(threadKey) ?? [];
+          hist.push({ role: 'user', content: oauthResult === 'ok'
+            ? '[User just signed in to Claude OAuth successfully. They are now authenticated.]'
+            : '[User attempted Claude OAuth login but it failed. They may try again.]',
+          });
+          this.projectChannelHistory.set(threadKey, hist);
+          await stateStore.savePendingProject(`conv_${threadKey}`, hist).catch(() => {});
+          return;
+        }
 
         // ── Pipeline control commands (status, re-run phases) ─────────────
         const lower = userMessage.toLowerCase();
@@ -776,7 +789,7 @@ export class Orchestrator {
   // Called from both the project channel handler and the DM handler.
   // Returns true if the message was an auth code and was handled.
 
-  private async tryHandleOAuthCode(userId: string, channelId: string, threadTs: string, text: string): Promise<boolean> {
+  private async tryHandleOAuthCode(userId: string, channelId: string, threadTs: string, text: string): Promise<'ok' | 'fail' | false> {
     const trimmed = text.trim();
     // Auth codes from platform.claude.com look like:
     //   "sxk6W4RUqSepeCWmvHWWHypB79O4zDjujeVmLT6q0aX0c18I#4172d3b297721575014e2af85053a78f"
@@ -801,10 +814,11 @@ export class Orchestrator {
       await userAuthStore.saveOAuthTokens(userId, tokens.accessToken, tokens.refreshToken, tokens.expiresIn);
       await stateStore.deletePendingProject(`oauth_user_${userId}`);
       await postReply('✅ *Signed in successfully!* Your Claude account is now linked to Swarmly. All AI calls in project channels will use your subscription.');
+      return 'ok';
     } catch (err) {
-      await postReply(`❌ Code exchange failed: ${(err as Error).message}\n\nPlease send \`auth\` again to get a fresh login link.`);
+      await postReply(`❌ Code exchange failed: ${(err as Error).message}\n\nSend \`auth\` again to get a fresh login link.`);
+      return 'fail';
     }
-    return true;
   }
 
   // ─── Auth DM handler ──────────────────────────────────────────────────────

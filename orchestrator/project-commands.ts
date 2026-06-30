@@ -245,7 +245,7 @@ export class ProjectCommands {
       return { handled: true };
     }
 
-    if (cmd === 'swarmly-login') {
+    if (cmd === 'swarmly-login' || cmd === 'auth' || cmd === 'login') {
       await this.runLogin(channelId, threadTs, webClient, userId);
       return { handled: true };
     }
