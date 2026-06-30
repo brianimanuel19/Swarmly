@@ -27,7 +27,7 @@ export function getOAuthClientId(): string {
 }
 
 export function isOAuthReady(): boolean {
-  return !!getOAuthClientId() && !!process.env.CLAUDE_OAUTH_REDIRECT_URI;
+  return !!getOAuthClientId();
 }
 
 // Scan the globally-installed @anthropic-ai/claude-code JS files for the UUID.

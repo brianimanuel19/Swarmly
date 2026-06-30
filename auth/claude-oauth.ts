@@ -7,9 +7,10 @@ import { getOAuthClientId, isOAuthReady } from './claude-client-id.js';
 // CLAUDE_OAUTH_REDIRECT_URI must point to your publicly accessible server,
 // e.g. https://swarmly.example.com/oauth/callback
 
-export const OAUTH_REDIRECT_URI = process.env.CLAUDE_OAUTH_REDIRECT_URI ?? '';
-export const OAUTH_AUTH_URL = process.env.CLAUDE_OAUTH_AUTH_URL ?? 'https://claude.ai/oauth/authorize';
-export const OAUTH_TOKEN_URL = process.env.CLAUDE_OAUTH_TOKEN_URL ?? 'https://claude.ai/oauth/token';
+// Claude Code's registered redirect URI — the only one Anthropic's OAuth server accepts for this client_id
+export const OAUTH_REDIRECT_URI = 'https://platform.claude.com/oauth/code/callback';
+export const OAUTH_AUTH_URL = process.env.CLAUDE_OAUTH_AUTH_URL ?? 'https://claude.com/cai/oauth/authorize';
+export const OAUTH_TOKEN_URL = process.env.CLAUDE_OAUTH_TOKEN_URL ?? 'https://platform.claude.com/v1/oauth/token';
 export const OAUTH_SCOPES = 'org:create_api_key user:profile user:inference';
 
 // Re-export for convenience

@@ -836,22 +836,61 @@ export class Orchestrator {
       const { verifier, challenge } = generatePKCE();
       const state = generateState();
 
-      // Store verifier + channelId in DB keyed by state (TTL via app logic — expires after 10 min)
-      await stateStore.savePendingProject(`oauth_state_${state}`, {
-        slackUserId: userId,
-        codeVerifier: verifier,
-        channelId,
-        expiresAt: Date.now() + 10 * 60 * 1000,
-      });
+      const oauthExpiry = Date.now() + 10 * 60 * 1000;
+      // Store verifier keyed by state (for server-side callback) and by userId (for manual code paste)
+      await Promise.all([
+        stateStore.savePendingProject(`oauth_state_${state}`, {
+          slackUserId: userId,
+          codeVerifier: verifier,
+          channelId,
+          expiresAt: oauthExpiry,
+        }),
+        stateStore.savePendingProject(`oauth_user_${userId}`, {
+          codeVerifier: verifier,
+          expiresAt: oauthExpiry,
+        }),
+      ]);
 
       const authUrl = buildAuthUrl(state, challenge);
       await reply(
         `🔐 *Authenticate with Claude*\n\n` +
-        `Click the link below to connect your Claude account. ` +
-        `This grants Swarmly access to run AI calls using your subscription.\n\n` +
-        `<${authUrl}|→ Connect Claude Account>\n\n` +
+        `1. Click the link: <${authUrl}|→ Connect Claude Account>\n` +
+        `2. Sign in and authorize Swarmly.\n` +
+        `3. After authorizing, you'll land on a page — look at the URL and copy the \`code=\` value.\n` +
+        `   (URL looks like: \`...?code=*abc123*&state=...\`)\n` +
+        `4. Send me: \`code abc123\`\n\n` +
         `_Link expires in 10 minutes. Send \`auth\` again to get a new link._`,
       );
+      return;
+    }
+
+    // code <value> — manual OAuth code paste after redirect to platform.claude.com
+    if (lower.startsWith('code ')) {
+      const code = text.trim().split(/\s+/)[1] ?? '';
+      if (!code) {
+        await reply('❌ Usage: `code <authorization_code>`');
+        return;
+      }
+
+      const entry = await stateStore.loadPendingProject(`oauth_user_${userId}`) as {
+        codeVerifier?: string; expiresAt?: number;
+      } | null;
+
+      if (!entry?.codeVerifier || (entry.expiresAt ?? 0) < Date.now()) {
+        await reply('❌ No pending login session found (or it expired). Please send `auth` first to start a new login.');
+        return;
+      }
+
+      try {
+        const { exchangeCode } = await import('../auth/claude-oauth.js');
+        const { userAuthStore } = await import('../auth/user-auth-store.js');
+        const tokens = await exchangeCode(code, entry.codeVerifier as string);
+        await userAuthStore.saveOAuthTokens(userId, tokens.accessToken, tokens.refreshToken, tokens.expiresIn);
+        await stateStore.deletePendingProject(`oauth_user_${userId}`);
+        await reply('✅ *Signed in successfully!* Your Claude account is now connected. Swarmly will use your subscription for AI calls.');
+      } catch (err) {
+        await reply(`❌ Token exchange failed: ${(err as Error).message}\n\nTry again — send \`auth\` to get a new login link.`);
+      }
       return;
     }
 
