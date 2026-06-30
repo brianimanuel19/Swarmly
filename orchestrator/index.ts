@@ -712,128 +712,35 @@ export class Orchestrator {
         });
       },
 
+      // All auth slash commands delegate to projectCommands for a single source of truth.
+      // projectCommands.runXxx() handles both project-channel and non-project-channel contexts.
+
       onAccount: async (args) => {
-        const channelId = args.command.channel_id as string;
-        const userId = args.command.user_id as string;
-        const project = await this.findProjectByChannel(channelId);
-        if (project) {
-          // Delegate to project-commands which has the full /account render
-          await projectCommands.handle({ text: '/swarmly-account', project, channelId, threadTs: '', webClient: this.webClient, userId });
-        } else {
-          // No project channel — render directly
-          const { userAuthStore } = await import('../auth/user-auth-store.js');
-          const { userSessionTracker, formatDuration, progressBar } = await import('../auth/user-session-tracker.js');
-          const status = await userAuthStore.getStatus(userId);
-          const stats = userSessionTracker.getStats(userId);
-          let profile: { email?: string; organizationName?: string; plan?: string } = {};
-          if (status.type === 'oauth') {
-            const token = await userAuthStore.getEffectiveKey(userId).catch(() => null);
-            if (token) {
-              const { fetchUserInfo } = await import('../auth/claude-oauth.js');
-              profile = await fetchUserInfo(token).catch(() => ({}));
-            }
-          }
-          const authMethod = status.type === 'oauth' ? 'Claude AI (OAuth)' : status.type === 'api_key' ? 'API Key' : 'Workspace default';
-          await this.webClient.chat.postMessage({
-            channel: channelId,
-            text: [
-              `*Auth method:* ${authMethod}`,
-              profile.email ? `*Email:* ${profile.email}` : '',
-              profile.organizationName ? `*Org:* ${profile.organizationName}` : '',
-              profile.plan ? `*Plan:* ${profile.plan}` : '',
-              '',
-              `*Session (5hr):*  ${stats.sessionPercent}% · \`${progressBar(stats.sessionPercent, 20)}\` · Resets in ${formatDuration(stats.sessionResetsInMs)}`,
-              `*Weekly (7 day):* ${stats.weeklyPercent}% · \`${progressBar(stats.weeklyPercent, 20)}\` · Resets in ${formatDuration(stats.weeklyResetsInMs)}`,
-              '',
-              '<https://claude.ai/settings/usage|Manage usage on claude.ai>',
-            ].filter(Boolean).join('\n'),
-          });
-        }
+        await projectCommands.runAccountUsage(
+          args.command.channel_id as string, '',
+          this.webClient, args.command.user_id as string,
+        );
       },
 
       onLogin: async (args) => {
-        const channelId = args.command.channel_id as string;
-        const userId = args.command.user_id as string;
-        const { isOAuthConfigured, generatePKCE, generateState, buildAuthUrl } = await import('../auth/claude-oauth.js');
-        const { userAuthStore } = await import('../auth/user-auth-store.js');
-        const status = await userAuthStore.getStatus(userId);
-        const statusLine = status.type === 'oauth' ? '🟢 Signed in via *OAuth*.' : status.type === 'api_key' ? '🔑 Using *personal API key*.' : '⚪ Not signed in (workspace default key).';
-
-        if (!isOAuthConfigured()) {
-          await this.webClient.chat.postMessage({
-            channel: channelId,
-            text: `${statusLine}\n\nOAuth is not configured. DM the bot with \`apikey sk-ant-...\` to use a personal API key.`,
-          });
-          return;
-        }
-
-        const { verifier, challenge } = generatePKCE();
-        const state = generateState();
-        await stateStore.savePendingProject(`oauth_state_${state}`, { slackUserId: userId, codeVerifier: verifier, channelId, expiresAt: Date.now() + 600_000 });
-        const authUrl = buildAuthUrl(state, challenge);
-        await this.webClient.chat.postMessage({
-          channel: channelId,
-          text: `${statusLine}\n\n🔐 *Sign in with Claude*\n<${authUrl}|→ Click here to authenticate>\n\n_Link expires in 10 minutes._`,
-          blocks: [
-            { type: 'section', text: { type: 'mrkdwn', text: `${statusLine}\n\n🔐 *Sign in with Claude*\nConnect your Claude account so Swarmly uses your personal subscription.` } },
-            { type: 'actions', elements: [{ type: 'button' as const, text: { type: 'plain_text' as const, text: '→ Sign in with Claude' }, url: authUrl, style: 'primary' as const, action_id: 'oauth_login_link' }] },
-            { type: 'context', elements: [{ type: 'mrkdwn', text: '_Or DM the bot: `apikey sk-ant-...` to use a personal API key. Link expires in 10 minutes._' }] },
-          ],
-        });
+        await projectCommands.runLogin(
+          args.command.channel_id as string, '',
+          this.webClient, args.command.user_id as string,
+        );
       },
 
       onSwitchAccount: async (args) => {
-        const channelId = args.command.channel_id as string;
-        const userId = args.command.user_id as string;
-        const { userAuthStore } = await import('../auth/user-auth-store.js');
-        const { isOAuthConfigured, generatePKCE, generateState, buildAuthUrl } = await import('../auth/claude-oauth.js');
-        const status = await userAuthStore.getStatus(userId);
-        const currentAuth = status.type === 'oauth' ? `🟢 *OAuth* (expires: ${status.expiry?.toLocaleString() ?? 'unknown'})` : status.type === 'api_key' ? '🔑 *Personal API key*' : '⚪ *None* (workspace default)';
-
-        const blocks: object[] = [
-          { type: 'section', text: { type: 'mrkdwn', text: `*Account — <@${userId}>*\n\nCurrent: ${currentAuth}` } },
-          { type: 'divider' },
-        ];
-
-        if (isOAuthConfigured()) {
-          const { verifier, challenge } = generatePKCE();
-          const state = generateState();
-          await stateStore.savePendingProject(`oauth_state_${state}`, { slackUserId: userId, codeVerifier: verifier, channelId, expiresAt: Date.now() + 600_000 });
-          const authUrl = buildAuthUrl(state, challenge);
-          blocks.push({
-            type: 'section',
-            text: { type: 'mrkdwn', text: '🔐 *Sign in with Claude OAuth*\nUse your personal Claude subscription.' },
-            accessory: { type: 'button', text: { type: 'plain_text', text: status.type === 'oauth' ? '↺ Re-authenticate' : '→ Sign in with OAuth' }, url: authUrl, ...(status.type !== 'oauth' ? { style: 'primary' } : {}), action_id: 'oauth_login_link' },
-          });
-        }
-
-        blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '🔑 *Use personal API key*\nDM the bot: `apikey sk-ant-...`' } });
-
-        if (status.type !== 'none') {
-          blocks.push({
-            type: 'section',
-            text: { type: 'mrkdwn', text: '🚪 *Sign out*\nRemove credentials, revert to workspace default.' },
-            accessory: { type: 'button', text: { type: 'plain_text', text: 'Sign out' }, action_id: 'switch_logout', value: `${userId}::${channelId}::`, style: 'danger' },
-          });
-        }
-
-        await this.webClient.chat.postMessage({
-          channel: channelId,
-          text: `Current auth: ${currentAuth}`,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          blocks: blocks as any,
-        });
+        await projectCommands.runSwitchAccount(
+          args.command.channel_id as string, '',
+          this.webClient, args.command.user_id as string,
+        );
       },
 
       onLogout: async (args) => {
-        const channelId = args.command.channel_id as string;
-        const userId = args.command.user_id as string;
-        const { userAuthStore } = await import('../auth/user-auth-store.js');
-        await userAuthStore.deleteAuth(userId);
-        await this.webClient.chat.postMessage({
-          channel: channelId,
-          text: `✅ Signed out <@${userId}>. Your credentials have been removed. Workspace default key will be used.`,
-        });
+        await projectCommands.runLogout(
+          args.command.channel_id as string, '',
+          this.webClient, args.command.user_id as string,
+        );
       },
     });
 

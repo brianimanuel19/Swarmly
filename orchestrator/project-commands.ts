@@ -241,22 +241,22 @@ export class ProjectCommands {
     // (Bolt routes them directly to handlers via slash command registration;
     //  index.ts also calls projectCommands.handle() to post into the project channel)
     if (cmd === 'swarmly-account' || cmd === 'swarmly-usage') {
-      await this._runAccountUsage(channelId, threadTs, webClient, userId);
+      await this.runAccountUsage(channelId, threadTs, webClient, userId);
       return { handled: true };
     }
 
     if (cmd === 'swarmly-login') {
-      await this._runLogin(channelId, threadTs, webClient, userId);
+      await this.runLogin(channelId, threadTs, webClient, userId);
       return { handled: true };
     }
 
     if (cmd === 'swarmly-switch') {
-      await this._runSwitchAccount(channelId, threadTs, webClient, userId);
+      await this.runSwitchAccount(channelId, threadTs, webClient, userId);
       return { handled: true };
     }
 
     if (cmd === 'swarmly-logout') {
-      await this._runLogout(channelId, threadTs, webClient, userId);
+      await this.runLogout(channelId, threadTs, webClient, userId);
       return { handled: true };
     }
 
@@ -497,7 +497,7 @@ export class ProjectCommands {
 
   // ── Account & Usage panel (mirrors Claude Code for VSCode) ───────────────
 
-  private async _runAccountUsage(channelId: string, threadTs: string, webClient: WebClient, userId?: string): Promise<void> {
+  async runAccountUsage(channelId: string, threadTs: string, webClient: WebClient, userId?: string): Promise<void> {
     if (!userId) {
       await webClient.chat.postMessage({ channel: channelId, ...this.th(threadTs), text: '❌ Cannot identify user.' });
       return;
@@ -611,7 +611,7 @@ export class ProjectCommands {
 
   // ── Auth commands ──────────────────────────────────────────────────────────
 
-  private async _runLogin(channelId: string, threadTs: string, webClient: WebClient, userId?: string): Promise<void> {
+  async runLogin(channelId: string, threadTs: string, webClient: WebClient, userId?: string): Promise<void> {
     if (!userId) {
       await webClient.chat.postMessage({ channel: channelId, ...this.th(threadTs), text: '❌ Cannot identify user. Please try again.' });
       return;
@@ -680,7 +680,7 @@ export class ProjectCommands {
     });
   }
 
-  private async _runSwitchAccount(channelId: string, threadTs: string, webClient: WebClient, userId?: string): Promise<void> {
+  async runSwitchAccount(channelId: string, threadTs: string, webClient: WebClient, userId?: string): Promise<void> {
     if (!userId) {
       await webClient.chat.postMessage({ channel: channelId, ...this.th(threadTs), text: '❌ Cannot identify user. Please try again.' });
       return;
@@ -741,7 +741,7 @@ export class ProjectCommands {
     });
   }
 
-  private async _runLogout(channelId: string, threadTs: string, webClient: WebClient, userId?: string): Promise<void> {
+  async runLogout(channelId: string, threadTs: string, webClient: WebClient, userId?: string): Promise<void> {
     if (!userId) {
       await webClient.chat.postMessage({ channel: channelId, ...this.th(threadTs), text: '❌ Cannot identify user.' });
       return;
