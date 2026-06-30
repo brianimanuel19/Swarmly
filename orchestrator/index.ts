@@ -185,6 +185,9 @@ export class Orchestrator {
           return;
         }
 
+        // Auto-detect auth code paste (user pastes code from platform.claude.com after /swarmly-login)
+        if (await this.tryHandleOAuthCode(userId, channelId, threadTs, userMessage)) return;
+
         // ── Pipeline control commands (status, re-run phases) ─────────────
         const lower = userMessage.toLowerCase();
 
@@ -769,9 +772,47 @@ export class Orchestrator {
     );
   }
 
+  // ─── OAuth code auto-detection ────────────────────────────────────────────
+  // Called from both the project channel handler and the DM handler.
+  // Returns true if the message was an auth code and was handled.
+
+  private async tryHandleOAuthCode(userId: string, channelId: string, threadTs: string, text: string): Promise<boolean> {
+    const trimmed = text.trim();
+    // Auth codes from platform.claude.com look like:
+    //   "sxk6W4RUqSepeCWmvHWWHypB79O4zDjujeVmLT6q0aX0c18I#4172d3b297721575014e2af85053a78f"
+    // Pattern: 30+ base64url chars, optionally followed by #<hex>
+    if (!/^[A-Za-z0-9+\-_/]{30,}(#[A-Za-z0-9a-f]{10,})?$/.test(trimmed)) return false;
+
+    const entry = await stateStore.loadPendingProject(`oauth_user_${userId}`) as {
+      codeVerifier?: string; expiresAt?: number;
+    } | null;
+    if (!entry?.codeVerifier || (entry.expiresAt ?? 0) < Date.now()) return false;
+
+    const postReply = (msg: string) => this.webClient.chat.postMessage({
+      channel: channelId,
+      ...(threadTs ? { thread_ts: threadTs } : {}),
+      text: msg,
+    });
+
+    try {
+      const { exchangeCode } = await import('../auth/claude-oauth.js');
+      const { userAuthStore } = await import('../auth/user-auth-store.js');
+      const tokens = await exchangeCode(trimmed, entry.codeVerifier);
+      await userAuthStore.saveOAuthTokens(userId, tokens.accessToken, tokens.refreshToken, tokens.expiresIn);
+      await stateStore.deletePendingProject(`oauth_user_${userId}`);
+      await postReply('✅ *Signed in successfully!* Your Claude account is now linked to Swarmly. All AI calls in project channels will use your subscription.');
+    } catch (err) {
+      await postReply(`❌ Code exchange failed: ${(err as Error).message}\n\nPlease send \`auth\` again to get a fresh login link.`);
+    }
+    return true;
+  }
+
   // ─── Auth DM handler ──────────────────────────────────────────────────────
 
   private async handleAuthDM(userId: string, channelId: string, text: string): Promise<void> {
+    // Auto-detect auth code paste from platform.claude.com (no prefix needed)
+    if (await this.tryHandleOAuthCode(userId, channelId, '', text)) return;
+
     const { userAuthStore } = await import('../auth/user-auth-store.js');
     const { isOAuthConfigured, generatePKCE, generateState, buildAuthUrl } = await import('../auth/claude-oauth.js');
     const lower = text.toLowerCase().trim();
@@ -854,43 +895,12 @@ export class Orchestrator {
       const authUrl = buildAuthUrl(state, challenge);
       await reply(
         `🔐 *Authenticate with Claude*\n\n` +
-        `1. Click the link: <${authUrl}|→ Connect Claude Account>\n` +
-        `2. Sign in and authorize Swarmly.\n` +
-        `3. After authorizing, you'll land on a page — look at the URL and copy the \`code=\` value.\n` +
-        `   (URL looks like: \`...?code=*abc123*&state=...\`)\n` +
-        `4. Send me: \`code abc123\`\n\n` +
-        `_Link expires in 10 minutes. Send \`auth\` again to get a new link._`,
+        `1. Click: <${authUrl}|→ Connect Claude Account>\n` +
+        `2. Sign in và authorize.\n` +
+        `3. Bạn sẽ thấy trang *"Authentication Code"* với một đoạn code dài.\n` +
+        `4. Copy code đó và *paste thẳng vào đây* — Swarmly tự nhận diện, không cần thêm gì.\n\n` +
+        `_Link hết hạn sau 10 phút. Gửi \`auth\` lại để lấy link mới._`,
       );
-      return;
-    }
-
-    // code <value> — manual OAuth code paste after redirect to platform.claude.com
-    if (lower.startsWith('code ')) {
-      const code = text.trim().split(/\s+/)[1] ?? '';
-      if (!code) {
-        await reply('❌ Usage: `code <authorization_code>`');
-        return;
-      }
-
-      const entry = await stateStore.loadPendingProject(`oauth_user_${userId}`) as {
-        codeVerifier?: string; expiresAt?: number;
-      } | null;
-
-      if (!entry?.codeVerifier || (entry.expiresAt ?? 0) < Date.now()) {
-        await reply('❌ No pending login session found (or it expired). Please send `auth` first to start a new login.');
-        return;
-      }
-
-      try {
-        const { exchangeCode } = await import('../auth/claude-oauth.js');
-        const { userAuthStore } = await import('../auth/user-auth-store.js');
-        const tokens = await exchangeCode(code, entry.codeVerifier as string);
-        await userAuthStore.saveOAuthTokens(userId, tokens.accessToken, tokens.refreshToken, tokens.expiresIn);
-        await stateStore.deletePendingProject(`oauth_user_${userId}`);
-        await reply('✅ *Signed in successfully!* Your Claude account is now connected. Swarmly will use your subscription for AI calls.');
-      } catch (err) {
-        await reply(`❌ Token exchange failed: ${(err as Error).message}\n\nTry again — send \`auth\` to get a new login link.`);
-      }
       return;
     }
 

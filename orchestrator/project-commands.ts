@@ -660,9 +660,9 @@ export class ProjectCommands {
     const authUrl = buildAuthUrl(state, challenge);
     await webClient.chat.postMessage({
       channel: channelId, ...this.th(threadTs),
-      text: `${statusLine}\n\n🔐 *Sign in with Claude*\n<${authUrl}|→ Click here to authenticate with Claude>\n\n_Link expires in 10 minutes. Run \`/swarmly-login\` again to get a fresh link._`,
+      text: `${statusLine}\n\n🔐 *Sign in with Claude*\n<${authUrl}|→ Click here to authenticate>\n\nSau khi sign in, bạn sẽ thấy trang *"Authentication Code"* — copy code đó và paste thẳng vào đây.\n\n_Link hết hạn sau 10 phút._`,
       blocks: [
-        { type: 'section', text: { type: 'mrkdwn', text: `${statusLine}\n\n🔐 *Sign in with Claude*\nClick below to connect your Claude account. This allows Swarmly to run AI calls using your personal Claude subscription.` } },
+        { type: 'section', text: { type: 'mrkdwn', text: `${statusLine}\n\n🔐 *Sign in with Claude*\nClick bên dưới để xác thực tài khoản Claude của bạn.` } },
         {
           type: 'actions',
           elements: [
@@ -675,7 +675,8 @@ export class ProjectCommands {
             },
           ],
         },
-        { type: 'context', elements: [{ type: 'mrkdwn', text: `_Or DM the bot: \`apikey sk-ant-...\` to use a personal API key. Link expires in 10 minutes._` }] },
+        { type: 'section', text: { type: 'mrkdwn', text: '📋 Sau khi authorize xong, bạn sẽ thấy trang *"Authentication Code"*.\nCopy code đó và *paste thẳng vào chat này* — Swarmly sẽ tự nhận diện.' } },
+        { type: 'context', elements: [{ type: 'mrkdwn', text: '_Hoặc DM bot: `apikey sk-ant-...` nếu dùng API key. Link hết hạn sau 10 phút._' }] },
       ],
     });
   }
